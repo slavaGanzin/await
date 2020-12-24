@@ -19,7 +19,7 @@ EXAMPLES:
 # waiting google (or your internet connection) to fail
   await 'curl google.com --fail'
 
-# definitely waiting google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)
+# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)
   await 'curl google.com --status 7
 
 # waits for redis socket and then connects to

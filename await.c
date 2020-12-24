@@ -165,8 +165,10 @@ int msleep(long msec)
 }
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
-int spinnerI[10];
-char *commands[10];
+int spinnerI[100];
+char *commands[100];
+FILE *out[100];
+
 int expectedStatus = 0;
 int any = 0;
 static int silent = 0;
@@ -177,7 +179,6 @@ static int fail = 0;
 static int verbose = 0;
 static char *onSuccess;
 int totalCommands = 0;
-char out[10][1 * 1024 * 1024];
 
 void spin(char *command, int color, int i) {
   if (!spinnerI[i] || spinnerI[i] == 0) spinnerI[i] = 7;
@@ -185,20 +186,17 @@ void spin(char *command, int color, int i) {
   fflush(stderr);
 }
 
-int shell(char *command, char *out) {
+int shell(char *command, FILE *out) {
   FILE *fp;
   int status;
-  char buf[2024];
-  char _command[2024];
-  strcpy(_command, command);
-  strcat(_command, " 2>&1");
+  char buf[1000];
 
   fflush(stdout);
   fflush(stderr);
-  fp = popen(_command, "r");
+  fp = popen(str_replace("command", command, "command         2>&1"), "r");
   if (fp == NULL) /* Handle error */;
-  while (fgets(buf, 2024, fp) !=NULL) {
-    sprintf(out, "%s%s", out, buf);
+  while (fgets(buf, 1000, fp) !=NULL) {
+    fprintf(out, buf);
     if (!silent && verbose) printf("\n\n%s", buf);
   }
 
@@ -225,7 +223,7 @@ void help() {
   "EXAMPLES:\n"
   "# waiting google (or your internet connection) to fail\n"
   "  await 'curl google.com --fail'\n\n"
-  "# definitely waiting google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
+  "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
   "  await 'curl google.com --status 7\n\n"
   "# waits for redis socket and then connects to\n"
   "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
@@ -245,6 +243,7 @@ void clean() {
   }
   fflush(stderr);
 }
+
 
 int main(int argc, char *argv[]){
   int c;
@@ -330,6 +329,11 @@ int main(int argc, char *argv[]){
   while (1) {
     exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
+      if (!out[i]) {
+        out[i] = fopen(str_replace("command", commands[i], "/tmp/command.await"), "w");
+      }
+      fseek(out[i], 0, SEEK_SET);
+
       status = shell(commands[i], out[i]);
       int done = ((fail && status != 0) || (!fail && status == expectedStatus));
 
@@ -338,16 +342,25 @@ int main(int argc, char *argv[]){
       syslog (LOG_NOTICE, "%d %s", status, commands[i]);
       if (done && any && !forever) break;
       if (!done) exit = 0;
-      // fflush(stderr);
+      fflush(stderr);
     }
     if (exit == 1) {
       if (onSuccess) {
         clean();
-        for(int i = 0; i < totalCommands; i = i + 1 ){
-          char *replace;
-          sprintf(replace, "$%d", i+1);
-          onSuccess  = str_replace(replace, out[i], onSuccess);
+        for(int i = 0; i < totalCommands; i = i + 1) {
+          fclose(out[i]);
+          out[i] = fopen(str_replace("command", commands[i], "/tmp/command.await"), "r");
+          char buffer[1000000];
+          fseek(out[i], 0L, SEEK_END);
+          long s = ftell(out[i]);
+          fseek(out[i], 0, SEEK_SET);
+          char *C[10] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
+          if ( buffer != NULL ) {
+            fread(buffer, sizeof(char), s, out[i]);
+            onSuccess = str_replace(str_replace("dddd", C[i], "$dddd"), buffer, onSuccess);
+          }
         }
+        // printf(onSuccess);
         system(onSuccess);
       }
       if (!forever) break; else msleep(interval);
