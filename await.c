@@ -10,6 +10,99 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <syslog.h>
+//
+// int strlen(char* str) {
+// 	int ret = 0;
+// 	while (str[ret]) {
+// 		ret++;
+// 	}
+// 	return ret;
+// }
+
+/**
+ * Replaces all found instances of the passed substring in the passed string.
+ *
+ * @param search The substring to look for
+ * @param replace The substring with which to replace the found substrings
+ * @param subject The string in which to look
+ *
+ * @return A new string with the search/replacement performed
+ **/
+char* str_replace(char* search, char* replace, char* subject) {
+	int i, j, k;
+
+	int searchSize = strlen(search);
+	int replaceSize = strlen(replace);
+	int size = strlen(subject);
+
+	char* ret;
+
+	if (!searchSize) {
+		ret = malloc(size + 1);
+		for (i = 0; i <= size; i++) {
+			ret[i] = subject[i];
+		}
+		return ret;
+	}
+
+	int retAllocSize = (strlen(subject) + 1) * 2; // Allocation size of the return string.
+    // let the allocation size be twice as that of the subject initially
+	ret = malloc(retAllocSize);
+
+	int bufferSize = 0; // Found characters buffer counter
+	char* foundBuffer = malloc(searchSize); // Found character bugger
+
+	for (i = 0, j = 0; i <= size; i++) {
+		/**
+         * Double the size of the allocated space if it's possible for us to surpass it
+		 **/
+		if (retAllocSize <= j + replaceSize) {
+			retAllocSize *= 2;
+			ret = (char*) realloc(ret, retAllocSize);
+		}
+		/**
+         * If there is a hit in characters of the substring, let's add it to the
+         * character buffer
+		 **/
+		else if (subject[i] == search[bufferSize]) {
+			foundBuffer[bufferSize] = subject[i];
+			bufferSize++;
+
+			/**
+             * If the found character's bugger's counter has reached the searched substring's
+             * length, then there's a hit. Let's copy the replace substring's characters
+             * onto the return string.
+			 **/
+			if (bufferSize == searchSize) {
+				bufferSize = 0;
+				for (k = 0; k < replaceSize; k++) {
+					ret[j++] = replace[k];
+				}
+			}
+		}
+		/**
+         * If the character is a miss, let's put everything back from the buffer
+         * to the return string, and set the found character buffer counter to 0.
+		 **/
+		else {
+			for (k = 0; k < bufferSize; k++) {
+				ret[j++] = foundBuffer[k];
+			}
+			bufferSize = 0;
+			/**
+             * Add the current character in the subject string to the return string.
+			 **/
+			ret[j++] = subject[i];
+		}
+	}
+
+	/**
+	 * Free memory
+	 **/
+	free(foundBuffer);
+
+	return ret;
+}
 
 static void skeleton_daemon()
 {
@@ -72,7 +165,8 @@ int msleep(long msec)
 }
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
-int spinnerI[1000];
+int spinnerI[10];
+char *commands[10];
 int expectedStatus = 0;
 int any = 0;
 static int silent = 0;
@@ -82,7 +176,8 @@ static int interval = 200;
 static int fail = 0;
 static int verbose = 0;
 static char *onSuccess;
-#include <sys/wait.h>
+int totalCommands = 0;
+char out[10][1 * 1024 * 1024];
 
 void spin(char *command, int color, int i) {
   if (!spinnerI[i] || spinnerI[i] == 0) spinnerI[i] = 7;
@@ -90,10 +185,10 @@ void spin(char *command, int color, int i) {
   fflush(stderr);
 }
 
-int shell(char *command) {
+int shell(char *command, char *out) {
   FILE *fp;
   int status;
-  char path[2024];
+  char buf[2024];
   char _command[2024];
   strcpy(_command, command);
   strcat(_command, " 2>&1");
@@ -102,12 +197,12 @@ int shell(char *command) {
   fflush(stderr);
   fp = popen(_command, "r");
   if (fp == NULL) /* Handle error */;
-    while (fgets(path, 2024, fp) !=NULL)
-      if (!silent && verbose) printf("\n\n%s", path);
+  while (fgets(buf, 2024, fp) !=NULL) {
+    sprintf(out, "%s%s", out, buf);
+    if (!silent && verbose) printf("\n\n%s", buf);
+  }
 
   status = pclose(fp);
-
-
 
   return WEXITSTATUS(status);
 }
@@ -123,22 +218,27 @@ void help() {
   "  --fail -f\twaiting commands to fail\n"
   "  --status -s\texpected status [default: 0]\n"
   "  --any -a\tterminate if any of command return expected status\n"
-  "  --exec -e\trun some shell command on success\n"
+  "  --exec -e\trun some shell command on success; $1, $2 ... $n - will be subtituted nth command stdout\n"
   "  --interval -i\tmilliseconds between one round of commands\n"
-  "  --forever -F\tdo not exit on success\n"
+  "  --no-exit -E\tdo not exit\n"
   "\n"
   "EXAMPLES:\n"
-  "  await 'curl google.com --fail'\t# waiting google to fail (or your internet)\n"
-  "  await 'curl google.com --status 7'\t# definitely waiting google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
-  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock' # waits for redis socket and then connects to\n"
-  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' # waiting for my vacation on french reviera\n"
-  "  await 'http \"https://ericchiang.github.io/\" | pup 'a attr{href}' --change # waiting for pup's author new blog post\n"
-
+  "# waiting google (or your internet connection) to fail\n"
+  "  await 'curl google.com --fail'\n\n"
+  "# definitely waiting google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
+  "  await 'curl google.com --status 7\n\n"
+  "# waits for redis socket and then connects to\n"
+  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
+  "# daily checking am I on french reviera. Just in case\n"
+  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
+  "# Yet another http monitor\n"
+  "  await 'curl https://whatnot.ai --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
+  "# waiting for pup's author new blog post\n"
+  "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
 );
   exit(0);
 }
 
-int totalCommands = 0;
 void clean() {
   for(int i = 0; i < totalCommands; i = i + 1 ){
     fprintf(stderr, "\033[%dA\r\033[K\r", i, i);
@@ -214,28 +314,23 @@ int main(int argc, char *argv[]){
     }
 
   if (!onSuccess && daemonize) {
-    printf("--exec 'command' is mandatory with --daemon");
-    exit(1);
+    printf("--daemon is meaningless without --exec 'command'");
   }
-  char *commands[100];
   while (optind < argc)
     commands[totalCommands++] = argv[optind++];
 
   if (totalCommands == 0) help();
-  clean();
 
   if (daemonize) skeleton_daemon();
 
   int status = -1;
   int exit = -1;
-  char path[2024];
   FILE *fp;
 
-  if (daemonize) syslog (LOG_NOTICE, "started");
   while (1) {
     exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
-      status = shell(commands[i]);
+      status = shell(commands[i], out[i]);
       int done = ((fail && status != 0) || (!fail && status == expectedStatus));
 
       if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
@@ -246,10 +341,17 @@ int main(int argc, char *argv[]){
       // fflush(stderr);
     }
     if (exit == 1) {
-      if (onSuccess) system(onSuccess);
+      if (onSuccess) {
+        clean();
+        for(int i = 0; i < totalCommands; i = i + 1 ){
+          char *replace;
+          sprintf(replace, "$%d", i+1);
+          onSuccess  = str_replace(replace, out[i], onSuccess);
+        }
+        system(onSuccess);
+      }
       if (!forever) break; else msleep(interval);
     } else msleep(interval);
   }
-  if (daemonize) syslog (LOG_NOTICE, "terminated");
   closelog();
 }
