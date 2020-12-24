@@ -76,6 +76,7 @@ int spinnerI = 0;
 int expectedStatus = 0;
 int any = 0;
 static int silent = 0;
+static int forever = 0;
 static int daemonize = 0;
 static int interval = 200;
 static int fail = 0;
@@ -157,6 +158,7 @@ int main(int argc, char *argv[]){
           {"silent",  no_argument,       0, 'V'},
           {"any",    no_argument,        0, 'a'},
           {"fail",    no_argument,       0, 'f'},
+          {"forever", no_argument,       0, 'F'},
           {"status",  required_argument, 0, 's'},
           /* These options don’t set a flag.
              We distinguish them by their indices. */
@@ -172,7 +174,7 @@ int main(int argc, char *argv[]){
       /* getopt_long stores the option index here. */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "e:vVs:afi:d", long_options, &option_index);
+      c = getopt_long (argc, argv, "e:vVs:ai:dFf", long_options, &option_index);
 
       /* Detect the end of the options. */
       if (c == -1)
@@ -196,6 +198,7 @@ int main(int argc, char *argv[]){
         case 's': expectedStatus=atoi(optarg); break;
         case 'f': fail = 1; break;
         case 'a': any = 1; break;
+        case 'F': forever = 1; break;
         case 'i': interval = atoi(optarg); break;
         case 'h': help(); break;
         case 'd':
@@ -230,21 +233,22 @@ int main(int argc, char *argv[]){
 
   if (daemonize) syslog (LOG_NOTICE, "started");
   while (1) {
-    exit = 0;
+    exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
       status = shell(commands[i]);
-      int done = (status == expectedStatus || fail && status != 0);
+      int done = ((fail && status != 0) || (!fail && status == expectedStatus));
 
-      if(!silent) spin(commands[i], done ? 2 : 1, i);
-      if (daemonize) syslog (LOG_NOTICE, "%d %s", status, commands[i]);
-      if (done && any) break;
-      if (!done) exit = -1;
-      fflush(stderr);
+      if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
+      // if (daemonize)
+      syslog (LOG_NOTICE, "%d %d %d %s", status, (fail && status != 0), status == expectedStatus, commands[i]);
+      if (done && any && !forever) break;
+      if (!done) exit = 0;
+      // fflush(stderr);
     }
-    if (exit > -1) {
+    if (exit == 1) {
       clean();
       if (onSuccess) system(onSuccess);
-      break;
+      if (!forever) break;
     } else msleep(interval);
   }
   if (daemonize) syslog (LOG_NOTICE, "terminated");
