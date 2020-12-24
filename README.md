@@ -8,6 +8,7 @@ ARGUMENTS:
   --help	print this help
   --verbose -v	increase verbosity
   --silent -V	print nothing
+  --fail -f	waiting commands to fail
   --status -s	expected status [default: 0]
   --any -a	terminate if any of command return expected status
   --exec -e	run some shell command on success

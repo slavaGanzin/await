@@ -33,13 +33,14 @@ int spinnerI = 0;
 int expectedStatus = 0;
 int any = 0;
 static int silent = 0;
+static int fail = 0;
 static int verbose = 0;
 static char *onSuccess;
 #include <sys/wait.h>
 
 void spin(char *command, int color){
   if (spinnerI == 0) spinnerI = 7;
-  fprintf(stderr, "\r                                                                                                                                                         \r");
+  fprintf(stderr, "\r                   \r");
   fprintf(stderr, "\033[0;3%dm%s\033[0m %s", color, spinner[spinnerI--], command);
 
   fflush(stderr);
@@ -62,12 +63,6 @@ int shell(char *command) {
 
   status = WEXITSTATUS(pclose(fp));
 
-  if(status == expectedStatus && onSuccess) {
-    fp = popen(onSuccess, "r");
-    if (!silent) while (fgets(path, 2024, fp) !=NULL) printf("%s", path);
-    pclose(fp);
-  }
-
   return status;
 }
 
@@ -79,6 +74,7 @@ void help() {
   "  --help\tprint this help\n"
   "  --verbose -v\tincrease verbosity\n"
   "  --silent -V\tprint nothing\n"
+  "  --fail -f\twaiting commands to fail\n"
   "  --status -s\texpected status [default: 0]\n"
   "  --any -a\tterminate if any of command return expected status\n"
   "  --exec -e\trun some shell command on success\n"
@@ -104,6 +100,7 @@ int main(int argc, char *argv[]){
           {"verbose", no_argument,       0, 'v'},
           {"silent",  no_argument,       0, 'V'},
           {"any",    no_argument,        0, 'a'},
+          {"fail",    no_argument,       0, 'f'},
           {"status",  required_argument, 0, 's'},
           /* These options don’t set a flag.
              We distinguish them by their indices. */
@@ -117,7 +114,7 @@ int main(int argc, char *argv[]){
       /* getopt_long stores the option index here. */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "e:vVs:a", long_options, &option_index);
+      c = getopt_long (argc, argv, "e:vVs:af", long_options, &option_index);
 
       /* Detect the end of the options. */
       if (c == -1)
@@ -139,6 +136,7 @@ int main(int argc, char *argv[]){
         case 'v': verbose = 1; break;
         case 'e': onSuccess=optarg; break;
         case 's': expectedStatus=atoi(optarg); break;
+        case 'f': fail = 1; break;
         case 'a': any = 1; break;
         case 'h': help();
         case '?':
@@ -159,17 +157,26 @@ int main(int argc, char *argv[]){
 
   int status = -1;
   int exit = -1;
+  char path[2024];
+  FILE *fp;
   while (exit == -1) {
     exit = 0;
     for(int i = 0; i < totalCommands; i = i + 1 ){
       status = shell(commands[i]);
-      if(!silent) spin(commands[i], status != expectedStatus ? 1 : 2);
-      if (status != expectedStatus) exit = -1;
+      int done = (status == expectedStatus || fail && status != 0);
+
+      if(!silent) spin(commands[i], done ? 2 : 1);
+      if (done && onSuccess) {
+        fp = popen(onSuccess, "r");
+        if (!silent) while (fgets(path, 2024, fp) !=NULL) printf("%s", path);
+        pclose(fp);
+      }
+      if (done && any) break;
+      if (!done) exit = -1;
       msleep(200);
       fflush(stderr);
-      if (status == expectedStatus && any) break;
     }
   }
-  fprintf(stderr, "\r                                                                                                                                                         \r");
+  fprintf(stderr, "\r                                                                                                                      \r");
   fflush(stderr);
 }
