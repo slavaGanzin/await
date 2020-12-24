@@ -72,7 +72,7 @@ int msleep(long msec)
 }
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
-int spinnerI = 0;
+int spinnerI[1000];
 int expectedStatus = 0;
 int any = 0;
 static int silent = 0;
@@ -85,8 +85,8 @@ static char *onSuccess;
 #include <sys/wait.h>
 
 void spin(char *command, int color, int i) {
-  if (spinnerI == 0) spinnerI = 7;
-  fprintf(stderr, "\033[%dA\r\033[K\033[0;3%dm%s\033[0m %s\033[%dB\r", i, color, spinner[spinnerI--], command, i);
+  if (!spinnerI[i] || spinnerI[i] == 0) spinnerI[i] = 7;
+  fprintf(stderr, "\033[%dA\r\033[K\033[0;3%dm%s\033[0m %s\033[%dB\r", i, color, spinner[spinnerI[i]--], command, i);
   fflush(stderr);
 }
 
@@ -240,15 +240,14 @@ int main(int argc, char *argv[]){
 
       if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
       // if (daemonize)
-      syslog (LOG_NOTICE, "%d %d %d %s", status, (fail && status != 0), status == expectedStatus, commands[i]);
+      syslog (LOG_NOTICE, "%d %s", status, commands[i]);
       if (done && any && !forever) break;
       if (!done) exit = 0;
       // fflush(stderr);
     }
     if (exit == 1) {
-      clean();
       if (onSuccess) system(onSuccess);
-      if (!forever) break;
+      if (!forever) break; else msleep(interval);
     } else msleep(interval);
   }
   if (daemonize) syslog (LOG_NOTICE, "terminated");
