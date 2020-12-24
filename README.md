@@ -13,6 +13,7 @@ ARGUMENTS:
   --any -a	terminate if any of command return expected status
   --exec -e	run some shell command on success
   --interval -i	milliseconds between one round of commands
+  --forever -F	do not exit on success
 
 EXAMPLES:
   await 'curl google.com --fail'	# waiting google to fail (or your internet)
