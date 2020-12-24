@@ -38,10 +38,9 @@ static int verbose = 0;
 static char *onSuccess;
 #include <sys/wait.h>
 
-void spin(char *command, int color){
+void spin(char *command, int color, int i) {
   if (spinnerI == 0) spinnerI = 7;
-  fprintf(stderr, "\r                   \r");
-  fprintf(stderr, "\033[0;3%dm%s\033[0m %s", color, spinner[spinnerI--], command);
+  fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[spinnerI--], command, i);
 
   fflush(stderr);
 }
@@ -165,7 +164,7 @@ int main(int argc, char *argv[]){
       status = shell(commands[i]);
       int done = (status == expectedStatus || fail && status != 0);
 
-      if(!silent) spin(commands[i], done ? 2 : 1);
+      if(!silent) spin(commands[i], done ? 2 : 1, i);
       if (done && onSuccess) {
         fp = popen(onSuccess, "r");
         if (!silent) while (fgets(path, 2024, fp) !=NULL) printf("%s", path);
@@ -177,6 +176,6 @@ int main(int argc, char *argv[]){
       fflush(stderr);
     }
   }
-  fprintf(stderr, "\r                                                                                                                      \r");
+  fprintf(stderr, "\033[2J");
   fflush(stderr);
 }
