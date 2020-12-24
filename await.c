@@ -25,27 +25,28 @@ static void skeleton_daemon()
 
     /* Catch, ignore and handle signals */
     //TODO: Implement a working signal handler */
-    signal(SIGCHLD, SIG_IGN);
-    signal(SIGHUP, SIG_IGN);
-
-    /* Fork off for the second time*/
-    pid = fork();
-
-    if (pid < 0) exit(EXIT_FAILURE);
-
-    /* Success: Let the parent terminate */
-    if (pid > 0) exit(EXIT_SUCCESS);
+    // signal(SIGCHLD, SIG_IGN);
+    // signal(SIGHUP, SIG_IGN);
+    //
+    // /* Fork off for the second time*/
+    // pid = fork();
+    //
+    // if (pid < 0) exit(EXIT_FAILURE);
+    //
+    // /* Success: Let the parent terminate */
+    // if (pid > 0) exit(EXIT_SUCCESS);
 
     /* Set new file permissions */
-    // umask(0);
+    umask(0);
 
+    setpgid(0, 0);
     /* Close all open file descriptors */
     // int x;
     // for (x = sysconf(_SC_OPEN_MAX); x>=0; x--) {
     //     close (x);
     // }
 
-    /* Open the log file */
+    // /* Open the log file */
     openlog("await", LOG_PID, LOG_DAEMON);
 }
 
@@ -85,7 +86,6 @@ static char *onSuccess;
 void spin(char *command, int color, int i) {
   if (spinnerI == 0) spinnerI = 7;
   fprintf(stderr, "\033[%dA\r\033[K\033[0;3%dm%s\033[0m %s\033[%dB\r", i, color, spinner[spinnerI--], command, i);
-
   fflush(stderr);
 }
 
@@ -106,9 +106,6 @@ int shell(char *command) {
 
   status = pclose(fp);
 
-  char str[80];
-  sprintf(str, "%d", status);
-  syslog (LOG_NOTICE, str);
 
 
   return WEXITSTATUS(status);
@@ -202,10 +199,6 @@ int main(int argc, char *argv[]){
         case 'i': interval = atoi(optarg); break;
         case 'h': help(); break;
         case 'd':
-          if (!onSuccess) {
-            printf("--exec 'command' is mandatory with --daemon");
-            exit(1);
-          }
           daemonize = 1;
           break;
         case '?':
@@ -217,6 +210,10 @@ int main(int argc, char *argv[]){
         }
     }
 
+  if (!onSuccess && daemonize) {
+    printf("--exec 'command' is mandatory with --daemon");
+    exit(1);
+  }
   char *commands[100];
   while (optind < argc)
     commands[totalCommands++] = argv[optind++];
@@ -236,12 +233,10 @@ int main(int argc, char *argv[]){
     exit = 0;
     for(int i = 0; i < totalCommands; i = i + 1 ){
       status = shell(commands[i]);
-      char str[80];
-      sprintf(str, "%d", status);
-      syslog (LOG_NOTICE, str);
       int done = (status == expectedStatus || fail && status != 0);
 
       if(!silent) spin(commands[i], done ? 2 : 1, i);
+      if (daemonize) syslog (LOG_NOTICE, "%d %s", status, commands[i]);
       if (done && any) break;
       if (!done) exit = -1;
       fflush(stderr);
