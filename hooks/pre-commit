@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+make -C build
+echo """# await
+\`\`\`bash
+$(./build/bin/await --help)
+
+\`\`\`
+""" > README.md
+git add .

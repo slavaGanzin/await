@@ -31,7 +31,7 @@ int msleep(long msec)
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
 int spinnerI = 0;
 int expectedStatus = 0;
-int race = 0;
+int any = 0;
 static int silent = 0;
 static int verbose = 0;
 static char *onSuccess;
@@ -58,7 +58,7 @@ int shell(char *command) {
   fp = popen(_command, "r");
   if (fp == NULL) /* Handle error */;
     while (fgets(path, 2024, fp) !=NULL)
-      if (!silent && verbose) printf("%s", path);
+      if (!silent && verbose) printf("\n\n%s", path);
 
   status = WEXITSTATUS(pclose(fp));
 
@@ -72,6 +72,27 @@ int shell(char *command) {
 }
 
 
+void help() {
+  printf("await [arguments] commands\n\n"
+  "awaits successfull execution of all shell commands\n"
+  "\nARGUMENTS:\n"
+  "  --help\tprint this help\n"
+  "  --verbose -v\tincrease verbosity\n"
+  "  --silent -V\tprint nothing\n"
+  "  --status -s\texpected status [default: 0]\n"
+  "  --any -a\tterminate if any of command return expected status\n"
+  "  --exec -e\trun some shell command on success\n"
+  "\n"
+  "EXAMPLES:\n"
+  "  await 'curl google.com --status 7'\t# waiting google to fail\n"
+  "  await 'date +%b | grep October' --exec 'xdg-open https://www.youtube.com/watch?v=NU9JoFKlaZ0'\t# waits till september ends\n"
+  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock'; redis-cli -s /tmp/redis.sock # waits for redis socket and then connects to\n"
+  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' # waiting for my vacation on french reviera\n"
+
+);
+  exit(0);
+}
+
 int main(int argc, char *argv[]){
   int c;
 
@@ -82,12 +103,12 @@ int main(int argc, char *argv[]){
           /* These options set a flag. */
           {"verbose", no_argument,       0, 'v'},
           {"silent",  no_argument,       0, 'V'},
-          {"race",    no_argument,       0, 'r'},
+          {"any",    no_argument,        0, 'a'},
           {"status",  required_argument, 0, 's'},
           /* These options don’t set a flag.
              We distinguish them by their indices. */
-          {"command",    required_argument, 0, 'c'},
-          // {"append",  no_argument,       0, 'b'},
+          {"exec",    required_argument, 0, 'e'},
+          {"help",       no_argument,       0, 'h'},
           // {"delete",  required_argument, 0, 'd'},
           // {"create",  required_argument, 0, 'c'},
           // {"file",    required_argument, 0, 'f'},
@@ -96,7 +117,7 @@ int main(int argc, char *argv[]){
       /* getopt_long stores the option index here. */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "c:vVs:r", long_options, &option_index);
+      c = getopt_long (argc, argv, "e:vVs:a", long_options, &option_index);
 
       /* Detect the end of the options. */
       if (c == -1)
@@ -116,9 +137,10 @@ int main(int argc, char *argv[]){
 
         case 'V': silent = 1; break;
         case 'v': verbose = 1; break;
-        case 'c': onSuccess=optarg; break;
+        case 'e': onSuccess=optarg; break;
         case 's': expectedStatus=atoi(optarg); break;
-        case 'r': race = 1; break;
+        case 'a': any = 1; break;
+        case 'h': help();
         case '?':
           /* getopt_long already printed an error message. */
           break;
@@ -133,6 +155,8 @@ int main(int argc, char *argv[]){
   while (optind < argc)
     commands[totalCommands++] = argv[optind++];
 
+  if (totalCommands == 0) help();
+
   int status = -1;
   int exit = -1;
   while (exit == -1) {
@@ -143,7 +167,7 @@ int main(int argc, char *argv[]){
       if (status != expectedStatus) exit = -1;
       msleep(200);
       fflush(stderr);
-      if (status == expectedStatus && race) break;
+      if (status == expectedStatus && any) break;
     }
   }
   fprintf(stderr, "\r                                                                                                                                                         \r");
