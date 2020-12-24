@@ -33,6 +33,7 @@ int spinnerI = 0;
 int expectedStatus = 0;
 int any = 0;
 static int silent = 0;
+static int interval = 200;
 static int fail = 0;
 static int verbose = 0;
 static char *onSuccess;
@@ -77,15 +78,25 @@ void help() {
   "  --status -s\texpected status [default: 0]\n"
   "  --any -a\tterminate if any of command return expected status\n"
   "  --exec -e\trun some shell command on success\n"
+  "  --interval -i\tmilliseconds between one round of commands\n"
   "\n"
   "EXAMPLES:\n"
-  "  await 'curl google.com --status 7'\t# waiting google to fail\n"
-  "  await 'date +%b | grep October' --exec 'xdg-open https://www.youtube.com/watch?v=NU9JoFKlaZ0'\t# waits till september ends\n"
-  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock'; redis-cli -s /tmp/redis.sock # waits for redis socket and then connects to\n"
+  "  await 'curl google.com --fail'\t# waiting google to fail (or your internet)\n"
+  "  await 'curl google.com --status 7'\t# definitely waiting google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
+  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock' # waits for redis socket and then connects to\n"
   "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' # waiting for my vacation on french reviera\n"
+  "  await 'http \"https://ericchiang.github.io/\" | pup 'a attr{href}' --change # waiting for pup's author new blog post\n"
 
 );
   exit(0);
+}
+
+int totalCommands = 0;
+void clean() {
+  for(int i = 0; i < totalCommands; i = i + 1 ){
+    fprintf(stderr, "\033[%dB\r\033[K\r", i, i);
+  }
+  fflush(stderr);
 }
 
 int main(int argc, char *argv[]){
@@ -104,6 +115,7 @@ int main(int argc, char *argv[]){
           /* These options don’t set a flag.
              We distinguish them by their indices. */
           {"exec",    required_argument, 0, 'e'},
+          {"interval",required_argument, 0, 'i'},
           {"help",       no_argument,       0, 'h'},
           // {"delete",  required_argument, 0, 'd'},
           // {"create",  required_argument, 0, 'c'},
@@ -113,7 +125,7 @@ int main(int argc, char *argv[]){
       /* getopt_long stores the option index here. */
       int option_index = 0;
 
-      c = getopt_long (argc, argv, "e:vVs:af", long_options, &option_index);
+      c = getopt_long (argc, argv, "e:vVs:afi:", long_options, &option_index);
 
       /* Detect the end of the options. */
       if (c == -1)
@@ -137,6 +149,7 @@ int main(int argc, char *argv[]){
         case 's': expectedStatus=atoi(optarg); break;
         case 'f': fail = 1; break;
         case 'a': any = 1; break;
+        case 'i': interval = atoi(optarg); break;
         case 'h': help();
         case '?':
           /* getopt_long already printed an error message. */
@@ -148,11 +161,11 @@ int main(int argc, char *argv[]){
     }
 
   char *commands[100];
-  int totalCommands = 0;
   while (optind < argc)
     commands[totalCommands++] = argv[optind++];
 
   if (totalCommands == 0) help();
+  clean();
 
   int status = -1;
   int exit = -1;
@@ -165,17 +178,15 @@ int main(int argc, char *argv[]){
       int done = (status == expectedStatus || fail && status != 0);
 
       if(!silent) spin(commands[i], done ? 2 : 1, i);
-      if (done && onSuccess) {
-        fp = popen(onSuccess, "r");
-        if (!silent) while (fgets(path, 2024, fp) !=NULL) printf("%s", path);
-        pclose(fp);
-      }
       if (done && any) break;
       if (!done) exit = -1;
-      msleep(200);
       fflush(stderr);
     }
+    if (exit > -1 && onSuccess) {
+      clean();
+      system(onSuccess);
+    }
+    if (exit == -1) msleep(interval);
   }
-  fprintf(stderr, "\033[2J");
-  fflush(stderr);
+  clean();
 }
