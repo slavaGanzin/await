@@ -358,10 +358,9 @@ int main(int argc, char *argv[]){
           long s = ftell(out[i]);
           fseek(out[i], 0, SEEK_SET);
           char *C[10] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
-          if ( buffer != NULL ) {
-            fread(buffer, sizeof(char), s, out[i]);
-            onSuccess = str_replace(str_replace("dddd", C[i], "$dddd"), buffer, onSuccess);
-          }
+          fread(buffer, sizeof(char), s, out[i]);
+          onSuccess = str_replace(str_replace("dddd", C[i], "$dddd"), buffer, onSuccess);
+          fclose(out[i]);
         }
         // printf(onSuccess);
         system(onSuccess);
