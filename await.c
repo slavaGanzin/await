@@ -244,6 +244,9 @@ void clean() {
   fflush(stderr);
 }
 
+char * stdout_command(char *command) {
+  return str_replace("command", str_replace("/", "", command), "/tmp/command.await");
+}
 
 int main(int argc, char *argv[]){
   int c;
@@ -330,7 +333,7 @@ int main(int argc, char *argv[]){
     exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
       if (!out[i]) {
-        out[i] = fopen(str_replace("command", commands[i], "/tmp/command.await"), "w");
+        out[i] = fopen(stdout_command(commands[i]), "w");
       }
       fseek(out[i], 0, SEEK_SET);
 
@@ -349,7 +352,7 @@ int main(int argc, char *argv[]){
         clean();
         for(int i = 0; i < totalCommands; i = i + 1) {
           fclose(out[i]);
-          out[i] = fopen(str_replace("command", commands[i], "/tmp/command.await"), "r");
+          out[i] = fopen(stdout_command(commands[i]), "r");
           char buffer[1000000];
           fseek(out[i], 0L, SEEK_END);
           long s = ftell(out[i]);
