@@ -1,5 +1,10 @@
 # await
+![](demo.gif)
+
 ## Installation
+```bash
+curl https://github.com/slavaGanzin/await/releases/tag/0.9/await -o /usr/local/bin/await
+```
 
 ## --help
 ```bash
