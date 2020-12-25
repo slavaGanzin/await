@@ -139,15 +139,15 @@ void spin(char *command, int color, int i) {
   fflush(stderr);
 }
 
+#define BUF_SIZE 1024
+#define CHUNK_SIZE BUF_SIZE * 10
+
 int shell(int i) {
-  int bufSize = 1024;
-  char buf[bufSize];
+  char buf[BUF_SIZE];
   fflush(stdout);
   fflush(stderr);
 
-  int chunkSize = bufSize * 20;
   outPos[i] = 0;
-  out[i] = malloc(chunkSize * sizeof(char));
   strcpy(out[i], "");
 
   FILE *fp;
@@ -155,10 +155,10 @@ int shell(int i) {
   if (!fp) exit(EXIT_FAILURE);
   if (fp == NULL) /* Handle error */;
 
-  while (fgets(buf, bufSize, fp) !=NULL) {
-    outPos[i] += bufSize;
-    if (outPos[i] % chunkSize > chunkSize*0.8) {
-      out[i] = realloc(out[i], outPos[i] + outPos[i] % chunkSize + chunkSize);
+  while (fgets(buf, BUF_SIZE, fp) !=NULL) {
+    outPos[i] += BUF_SIZE;
+    if (outPos[i] % CHUNK_SIZE > CHUNK_SIZE*0.8) {
+      out[i] = realloc(out[i], outPos[i] + outPos[i] % CHUNK_SIZE + CHUNK_SIZE);
     }
 
     sprintf(out[i], "%s%s", out[i], buf);
@@ -279,6 +279,10 @@ int main(int argc, char *argv[]){
   int status = -1;
   int exit = -1;
   FILE *fp;
+
+  for(int i = 0; i < totalCommands; i = i + 1 ){
+    out[i] = malloc(CHUNK_SIZE * sizeof(char));
+  }
 
   while (1) {
     exit = 1;
