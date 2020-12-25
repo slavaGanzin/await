@@ -13,6 +13,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: cc await.c -o await
-      run: .cc await.c -o await
+    - name: cc
+      run: cc await.c -o await
     
