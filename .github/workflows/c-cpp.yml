@@ -1,0 +1,18 @@
+name: c CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: cc await.c -o await
+      run: .cc await.c -o await
+    
