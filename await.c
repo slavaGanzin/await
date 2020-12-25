@@ -111,6 +111,8 @@ int msleep(long msec)
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
 int spinnerI[100];
 char *commands[100];
+char *out[100];
+size_t outPos[100];
 
 int expectedStatus = 0;
 int any = 0;
@@ -122,7 +124,6 @@ static int fail = 0;
 static int verbose = 0;
 static char *onSuccess;
 int totalCommands = 0;
-char out[10][1 * 1024 * 1024];
 
 
 void clean() {
@@ -138,17 +139,29 @@ void spin(char *command, int color, int i) {
   fflush(stderr);
 }
 
-int shell(char *command, char *out) {
-  char buf[1000];
+int shell(int i) {
+  int bufSize = 1024;
+  char buf[bufSize];
   fflush(stdout);
   fflush(stderr);
 
+  int chunkSize = bufSize * 20;
+  outPos[i] = 0;
+  out[i] = malloc(chunkSize * sizeof(char));
+  strcpy(out[i], "");
+
   FILE *fp;
-  fp = popen(command, "r");
+  fp = popen(commands[i], "r");
   if (!fp) exit(EXIT_FAILURE);
   if (fp == NULL) /* Handle error */;
-  while (fgets(buf, 1000, fp) !=NULL) {
-    sprintf(out, "%s%s", out, buf);
+
+  while (fgets(buf, bufSize, fp) !=NULL) {
+    outPos[i] += bufSize;
+    if (outPos[i] % chunkSize > chunkSize*0.8) {
+      out[i] = realloc(out[i], outPos[i] + outPos[i] % chunkSize + chunkSize);
+    }
+
+    sprintf(out[i], "%s%s", out[i], buf);
     if (!silent && verbose) printf("\n\n%s", buf);
   }
 
@@ -270,8 +283,7 @@ int main(int argc, char *argv[]){
   while (1) {
     exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
-      strcpy(out[i], "");
-      status = shell(commands[i], out[i]);
+      status = shell(i);
       int done = ((fail && status != 0) || (!fail && status == expectedStatus));
 
       if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
@@ -284,7 +296,7 @@ int main(int argc, char *argv[]){
       if (onSuccess) {
         for(int i = 0; i < totalCommands; i = i + 1) {
           char C[5];
-          sprintf(C, "\\%d", i+1);
+          // sprintf(C, "\\%d", i+1);
           onSuccess = replace(C, out[i], onSuccess);
         }
         clean();
@@ -292,6 +304,9 @@ int main(int argc, char *argv[]){
       }
       if (!forever) break; else msleep(interval);
     } else msleep(interval);
+  }
+  for(int i = 0; i < totalCommands; i = i + 1 ){
+    free(out[i]);
   }
   closelog();
 }
