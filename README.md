@@ -2,7 +2,7 @@
 ```bash
 await [arguments] commands
 
-runs list of commands and waits for their termination
+# runs list of commands and waits for their termination
 
 ARGUMENTS:
   --help	#print this help
@@ -11,7 +11,7 @@ ARGUMENTS:
   --fail -f	#waiting commands to fail
   --status -s	#expected status [default: 0]
   --any -a	#terminate if any of command return expected status
-  --exec -e	#run some shell command on success; $1, $2 ... $n - will be subtituted nth command stdout
+  --exec -e	#run some shell command on success; \1, \2 ... \n - will be subtituted nth command stdout
   --interval -i	#milliseconds between one round of commands [default: 200]
   --no-exit -E	#do not exit
 
@@ -33,6 +33,9 @@ EXAMPLES:
 
 # Yet another server monitor
   await 'http https://whatnot.ai' --forever --fail --exec "ntfy send \'whatnot.ai down\'"'
+
+# waiting for new iPhone in daemon mode
+  await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12' --interval 86400 --daemon --exec "ntfy send " 
 
 ```
 

@@ -10,81 +10,42 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <syslog.h>
+#include <string.h>
 
-char* str_replace(char* search, char* replace, char* subject) {
-	int i, j, k;
+char* replace(const char* oldW, const char* newW, const char* s) {
+    char* result;
+    int i, cnt = 0;
+    int newWlen = strlen(newW);
+    int oldWlen = strlen(oldW);
 
-	int searchSize = strlen(search);
-	int replaceSize = strlen(replace);
-	int size = strlen(subject);
+    // Counting the number of times old word
+    // occur in the string
+    for (i = 0; s[i] != '\0'; i++) {
+        if (strstr(&s[i], oldW) == &s[i]) {
+            cnt++;
 
-	char* ret;
+            // Jumping to index after the old word.
+            i += oldWlen - 1;
+        }
+    }
 
-	if (!searchSize) {
-		ret = malloc(size + 1);
-		for (i = 0; i <= size; i++) {
-			ret[i] = subject[i];
-		}
-		return ret;
-	}
+    // Making new string of enough length
+    result = (char*)malloc(i + cnt * (newWlen - oldWlen) + 1);
 
-	int retAllocSize = (strlen(subject) + 1) * 2; // Allocation size of the return string.
-    // let the allocation size be twice as that of the subject initially
-	ret = malloc(retAllocSize);
+    i = 0;
+    while (*s) {
+        // compare the substring with the result
+        if (strstr(s, oldW) == s) {
+            strcpy(&result[i], newW);
+            i += newWlen;
+            s += oldWlen;
+        }
+        else
+            result[i++] = *s++;
+    }
 
-	int bufferSize = 0; // Found characters buffer counter
-	char* foundBuffer = malloc(searchSize); // Found character bugger
-
-	for (i = 0, j = 0; i <= size; i++) {
-		/**
-         * Double the size of the allocated space if it's possible for us to surpass it
-		 **/
-		if (retAllocSize <= j + replaceSize) {
-			retAllocSize *= 2;
-			ret = (char*) realloc(ret, retAllocSize);
-		}
-		/**
-         * If there is a hit in characters of the substring, let's add it to the
-         * character buffer
-		 **/
-		else if (subject[i] == search[bufferSize]) {
-			foundBuffer[bufferSize] = subject[i];
-			bufferSize++;
-
-			/**
-             * If the found character's bugger's counter has reached the searched substring's
-             * length, then there's a hit. Let's copy the replace substring's characters
-             * onto the return string.
-			 **/
-			if (bufferSize == searchSize) {
-				bufferSize = 0;
-				for (k = 0; k < replaceSize; k++) {
-					ret[j++] = replace[k];
-				}
-			}
-		}
-		/**
-         * If the character is a miss, let's put everything back from the buffer
-         * to the return string, and set the found character buffer counter to 0.
-		 **/
-		else {
-			for (k = 0; k < bufferSize; k++) {
-				ret[j++] = foundBuffer[k];
-			}
-			bufferSize = 0;
-			/**
-             * Add the current character in the subject string to the return string.
-			 **/
-			ret[j++] = subject[i];
-		}
-	}
-
-	/**
-	 * Free memory
-	 **/
-	free(foundBuffer);
-
-	return ret;
+    result[i] = '\0';
+    return result;
 }
 
 static void skeleton_daemon()
@@ -150,7 +111,6 @@ int msleep(long msec)
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
 int spinnerI[100];
 char *commands[100];
-FILE *out[100];
 
 int expectedStatus = 0;
 int any = 0;
@@ -162,10 +122,12 @@ static int fail = 0;
 static int verbose = 0;
 static char *onSuccess;
 int totalCommands = 0;
+char out[10][1 * 1024 * 1024];
+
 
 void clean() {
   for(int i = 0; i < totalCommands; i = i + 1 ){
-    fprintf(stderr, "\033[%dA\r\033[K\r", i+1);
+    fprintf(stderr, "\033[%dB\r\033[K\r\033[%dA", i, i);
   }
   fflush(stderr);
 }
@@ -176,32 +138,26 @@ void spin(char *command, int color, int i) {
   fflush(stderr);
 }
 
-int shell(char *command, FILE *out) {
+int shell(char *command, char *out) {
   char buf[1000];
   fflush(stdout);
   fflush(stderr);
-  char _command[10000];
-  strcpy (_command, command);
-  strcat(_command, " 2>&1");
 
   FILE *fp;
-  fp = popen(_command, "r");
+  fp = popen(command, "r");
+  if (!fp) exit(EXIT_FAILURE);
   if (fp == NULL) /* Handle error */;
   while (fgets(buf, 1000, fp) !=NULL) {
-    fprintf(out, buf);
+    sprintf(out, "%s%s", out, buf);
     if (!silent && verbose) printf("\n\n%s", buf);
   }
 
   return WEXITSTATUS(pclose(fp));
 }
 
-char * stdout_command(char *command) {
-  return str_replace("command", str_replace("/", "", command), "/tmp/command.await");
-}
-
 void help() {
   printf("await [arguments] commands\n\n"
-  "runs list of commands and waits for their termination\n"
+  "# runs list of commands and waits for their termination\n"
   "\nARGUMENTS:\n"
   "  --help\t#print this help\n"
   "  --verbose -v\t#increase verbosity\n"
@@ -209,7 +165,7 @@ void help() {
   "  --fail -f\t#waiting commands to fail\n"
   "  --status -s\t#expected status [default: 0]\n"
   "  --any -a\t#terminate if any of command return expected status\n"
-  "  --exec -e\t#run some shell command on success; $1, $2 ... $n - will be subtituted nth command stdout\n"
+  "  --exec -e\t#run some shell command on success; \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
   "  --no-exit -E\t#do not exit\n"
   "\n"
@@ -226,6 +182,9 @@ void help() {
   "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
   "# Yet another server monitor\n"
   "  await 'http https://whatnot.ai' --forever --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
+  "# waiting for new iPhone in daemon mode\n"
+  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 86400 --daemon --exec \"ntfy send \1\" \n\n"
+
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
 );
@@ -246,23 +205,16 @@ void args(int argc, char *argv[]) {
             {"fail",    no_argument,       0, 'f'},
             {"forever", no_argument,       0, 'F'},
             {"status",  required_argument, 0, 's'},
-            /* These options don’t set a flag.
-               We distinguish them by their indices. */
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
             {"help",       no_argument,       0, 'h'},
             {"daemon", no_argument,       0, 'd'},
-            // {"delete",  required_argument, 0, 'd'},
-            // {"create",  required_argument, 0, 'c'},
-            // {"file",    required_argument, 0, 'f'},
             {0,0}
           };
-        /* getopt_long stores the option index here. */
         int option_index = 0;
 
         c = getopt_long (argc, argv, "e:vVs:ai:dFf", long_options, &option_index);
 
-        /* Detect the end of the options. */
         if (c == -1)
           break;
 
@@ -291,7 +243,6 @@ void args(int argc, char *argv[]) {
             daemonize = 1;
             break;
           case '?':
-            /* getopt_long already printed an error message. */
             break;
 
           default:
@@ -319,16 +270,11 @@ int main(int argc, char *argv[]){
   while (1) {
     exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
-      if (!out[i]) {
-        out[i] = fopen(stdout_command(commands[i]), "w");
-      }
-      fseek(out[i], 0, SEEK_SET);
-
+      strcpy(out[i], "");
       status = shell(commands[i], out[i]);
       int done = ((fail && status != 0) || (!fail && status == expectedStatus));
 
       if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
-      // if (daemonize)
       syslog (LOG_NOTICE, "%d %s", status, commands[i]);
       if (done && any && !forever) break;
       if (!done) exit = 0;
@@ -336,20 +282,12 @@ int main(int argc, char *argv[]){
     }
     if (exit == 1) {
       if (onSuccess) {
-        clean();
         for(int i = 0; i < totalCommands; i = i + 1) {
-          fclose(out[i]);
-          out[i] = fopen(stdout_command(commands[i]), "r");
-          char buffer[1000000];
-          fseek(out[i], 0L, SEEK_END);
-          long s = ftell(out[i]);
-          fseek(out[i], 0, SEEK_SET);
-          char *C[10] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"};
-          fread(buffer, sizeof(char), s, out[i]);
-          onSuccess = str_replace(str_replace("dddd", C[i], "$dddd"), buffer, onSuccess);
-          fclose(out[i]);
+          char C[5];
+          sprintf(C, "\\%d", i+1);
+          onSuccess = replace(C, out[i], onSuccess);
         }
-        // printf(onSuccess);
+        clean();
         system(onSuccess);
       }
       if (!forever) break; else msleep(interval);
