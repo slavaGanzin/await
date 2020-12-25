@@ -161,7 +161,7 @@ int shell(int i) {
       out[i] = realloc(out[i], outPos[i] + outPos[i] % CHUNK_SIZE + CHUNK_SIZE);
     }
 
-    sprinf(out[i], "%s%s", out[i], buf);
+    sprintf(out[i], "%s%s", out[i], buf);
     if (!silent && verbose) printf("\n\n%s", buf);
   }
 
