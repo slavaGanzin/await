@@ -10,24 +10,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <syslog.h>
-//
-// int strlen(char* str) {
-// 	int ret = 0;
-// 	while (str[ret]) {
-// 		ret++;
-// 	}
-// 	return ret;
-// }
 
-/**
- * Replaces all found instances of the passed substring in the passed string.
- *
- * @param search The substring to look for
- * @param replace The substring with which to replace the found substrings
- * @param subject The string in which to look
- *
- * @return A new string with the search/replacement performed
- **/
 char* str_replace(char* search, char* replace, char* subject) {
 	int i, j, k;
 
@@ -180,37 +163,36 @@ static int verbose = 0;
 static char *onSuccess;
 int totalCommands = 0;
 
+void clean() {
+  for(int i = 0; i < totalCommands; i = i + 1 ){
+    fprintf(stderr, "\033[%dA\r\033[K\r", i+1);
+  }
+  fflush(stderr);
+}
+
 void spin(char *command, int color, int i) {
   if (!spinnerI[i] || spinnerI[i] == 0) spinnerI[i] = 7;
-  fprintf(stderr, "\033[%dA\r\033[K\033[0;3%dm%s\033[0m %s\033[%dB\r", i, color, spinner[spinnerI[i]--], command, i);
+  fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[spinnerI[i]--], command, i);
   fflush(stderr);
 }
 
 int shell(char *command, FILE *out) {
-  FILE *fp;
-  int status;
   char buf[1000];
-
   fflush(stdout);
   fflush(stderr);
-  fp = popen(str_replace("command", command, "command         2>&1"), "r");
+  char _command[10000];
+  strcpy (_command, command);
+  strcat(_command, " 2>&1");
+
+  FILE *fp;
+  fp = popen(_command, "r");
   if (fp == NULL) /* Handle error */;
   while (fgets(buf, 1000, fp) !=NULL) {
     fprintf(out, buf);
     if (!silent && verbose) printf("\n\n%s", buf);
   }
 
-  status = pclose(fp);
-
-  return WEXITSTATUS(status);
-}
-
-
-void clean() {
-  for(int i = 0; i < totalCommands; i = i + 1 ){
-    fprintf(stderr, "\033[%dA\r\033[K\r", i, i);
-  }
-  fflush(stderr);
+  return WEXITSTATUS(pclose(fp));
 }
 
 char * stdout_command(char *command) {
@@ -228,101 +210,106 @@ void help() {
   "  --status -s\t#expected status [default: 0]\n"
   "  --any -a\t#terminate if any of command return expected status\n"
   "  --exec -e\t#run some shell command on success; $1, $2 ... $n - will be subtituted nth command stdout\n"
-  "  --interval -i\t#milliseconds between one round of commands\n"
+  "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
   "  --no-exit -E\t#do not exit\n"
   "\n"
   "EXAMPLES:\n"
   "# waiting google (or your internet connection) to fail\n"
-  "  await 'curl google.com --fail'\n\n"
+  "  await 'curl google.com' --fail\n\n"
   "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
-  "  await 'curl google.com --status 7'\n\n"
+  "  await 'curl google.com' --status 7\n\n"
   "# waits for redis socket and then connects to\n"
   "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
-  "# daily checking am I on french reviera. Just in case\n"
+  "# lazy version\n"
+  "  await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock\n\n"
+  "# daily checking if I am on french reviera. Just in case\n"
   "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
-  "# Yet another http monitor\n"
-  "  await 'curl https://whatnot.ai' --forever --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
+  "# Yet another server monitor\n"
+  "  await 'http https://whatnot.ai' --forever --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
 );
   exit(0);
 }
 
-int main(int argc, char *argv[]){
-  int c;
+void args(int argc, char *argv[]) {
+    int c;
 
-  while (1)
-    {
-      static struct option long_options[] =
-        {
-          /* These options set a flag. */
-          {"verbose", no_argument,       0, 'v'},
-          {"silent",  no_argument,       0, 'V'},
-          {"any",    no_argument,        0, 'a'},
-          {"fail",    no_argument,       0, 'f'},
-          {"forever", no_argument,       0, 'F'},
-          {"status",  required_argument, 0, 's'},
-          /* These options don’t set a flag.
-             We distinguish them by their indices. */
-          {"exec",    required_argument, 0, 'e'},
-          {"interval",required_argument, 0, 'i'},
-          {"help",       no_argument,       0, 'h'},
-          {"daemon", no_argument,       0, 'd'},
-          // {"delete",  required_argument, 0, 'd'},
-          // {"create",  required_argument, 0, 'c'},
-          // {"file",    required_argument, 0, 'f'},
-          {0,0}
-        };
-      /* getopt_long stores the option index here. */
-      int option_index = 0;
+    while (1)
+      {
+        static struct option long_options[] =
+          {
+            /* These options set a flag. */
+            {"verbose", no_argument,       0, 'v'},
+            {"silent",  no_argument,       0, 'V'},
+            {"any",    no_argument,        0, 'a'},
+            {"fail",    no_argument,       0, 'f'},
+            {"forever", no_argument,       0, 'F'},
+            {"status",  required_argument, 0, 's'},
+            /* These options don’t set a flag.
+               We distinguish them by their indices. */
+            {"exec",    required_argument, 0, 'e'},
+            {"interval",required_argument, 0, 'i'},
+            {"help",       no_argument,       0, 'h'},
+            {"daemon", no_argument,       0, 'd'},
+            // {"delete",  required_argument, 0, 'd'},
+            // {"create",  required_argument, 0, 'c'},
+            // {"file",    required_argument, 0, 'f'},
+            {0,0}
+          };
+        /* getopt_long stores the option index here. */
+        int option_index = 0;
 
-      c = getopt_long (argc, argv, "e:vVs:ai:dFf", long_options, &option_index);
+        c = getopt_long (argc, argv, "e:vVs:ai:dFf", long_options, &option_index);
 
-      /* Detect the end of the options. */
-      if (c == -1)
-        break;
+        /* Detect the end of the options. */
+        if (c == -1)
+          break;
 
-      switch (c)
-        {
-        case 0:
-          /* If this option set a flag, do nothing else now. */
-          if (long_options[option_index].flag != 0)
+        switch (c)
+          {
+          case 0:
+            /* If this option set a flag, do nothing else now. */
+            if (long_options[option_index].flag != 0)
+              break;
+            printf ("option %s", long_options[option_index].name);
+            if (optarg)
+              printf (" with arg %s", optarg);
+            printf ("\n");
             break;
-          printf ("option %s", long_options[option_index].name);
-          if (optarg)
-            printf (" with arg %s", optarg);
-          printf ("\n");
-          break;
 
-        case 'V': silent = 1; break;
-        case 'v': verbose = 1; break;
-        case 'e': onSuccess=optarg; break;
-        case 's': expectedStatus=atoi(optarg); break;
-        case 'f': fail = 1; break;
-        case 'a': any = 1; break;
-        case 'F': forever = 1; break;
-        case 'i': interval = atoi(optarg); break;
-        case 'h': help(); break;
-        case 'd':
-          daemonize = 1;
-          break;
-        case '?':
-          /* getopt_long already printed an error message. */
-          break;
+          case 'V': silent = 1; break;
+          case 'v': verbose = 1; break;
+          case 'e': onSuccess=optarg; break;
+          case 's': expectedStatus=atoi(optarg); break;
+          case 'f': fail = 1; break;
+          case 'a': any = 1; break;
+          case 'F': forever = 1; break;
+          case 'i': interval = atoi(optarg); break;
+          case 'h': help(); break;
+          case 'd':
+            daemonize = 1;
+            break;
+          case '?':
+            /* getopt_long already printed an error message. */
+            break;
 
-        default:
-          abort ();
-        }
+          default:
+            abort ();
+          }
+      }
+
+    if (!onSuccess && daemonize) {
+      printf("--daemon is meaningless without --exec 'command'");
     }
+    while (optind < argc)
+      commands[totalCommands++] = argv[optind++];
 
-  if (!onSuccess && daemonize) {
-    printf("--daemon is meaningless without --exec 'command'");
-  }
-  while (optind < argc)
-    commands[totalCommands++] = argv[optind++];
+    if (totalCommands == 0) help();
+}
 
-  if (totalCommands == 0) help();
-
+int main(int argc, char *argv[]){
+  args(argc, argv);
   if (daemonize) skeleton_daemon();
 
   int status = -1;
