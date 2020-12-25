@@ -143,6 +143,7 @@ void spin(char *command, int color, int i) {
 #define CHUNK_SIZE BUF_SIZE * 10
 
 int shell(int i) {
+  if(!silent) spin(commands[i], 7, i);
   char buf[BUF_SIZE];
   fflush(stdout);
   fflush(stderr);
@@ -290,7 +291,6 @@ int main(int argc, char *argv[]){
     for(int i = 0; i < totalCommands; i = i + 1 ){
       status = shell(i);
       int done = ((fail && status != 0) || (!fail && status == expectedStatus));
-
       if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
       syslog (LOG_NOTICE, "%d %s", status, commands[i]);
       if (done && any && !forever) break;
