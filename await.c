@@ -161,7 +161,7 @@ int shell(int i) {
       out[i] = realloc(out[i], outPos[i] + outPos[i] % CHUNK_SIZE + CHUNK_SIZE);
     }
 
-    sprintf(out[i], "%s%s", out[i], buf);
+    sprinf(out[i], "%s%s", out[i], buf);
     if (!silent && verbose) printf("\n\n%s", buf);
   }
 
@@ -178,7 +178,8 @@ void help() {
   "  --fail -f\t#waiting commands to fail\n"
   "  --status -s\t#expected status [default: 0]\n"
   "  --any -a\t#terminate if any of command return expected status\n"
-  "  --exec -e\t#run some shell command on success; \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
+  "  --exec -e\t#run some shell command on success;\n"
+  "               \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
   "  --no-exit -E\t#do not exit\n"
   "\n"
@@ -196,7 +197,7 @@ void help() {
   "# Yet another server monitor\n"
   "  await 'http https://whatnot.ai' --forever --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
   "# waiting for new iPhone in daemon mode\n"
-  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 86400 --daemon --exec \"ntfy send \1\" \n\n"
+  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --interval 86400 --daemon --exec \"ntfy send \1\" \n\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 gcc await.c -o await
 echo """# await
+## Installation
+
+## --help
 \`\`\`bash
 $(./await --help)
 
