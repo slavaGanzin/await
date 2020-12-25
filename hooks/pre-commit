@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-make -C build
+gcc await.c -o await
 echo """# await
 \`\`\`bash
-$(./build/bin/await --help)
+$(./await --help)
 
 \`\`\`
 """ > README.md
