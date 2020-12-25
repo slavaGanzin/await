@@ -206,37 +206,6 @@ int shell(char *command, FILE *out) {
 }
 
 
-void help() {
-  printf("await [arguments] commands\n\n"
-  "awaits successfull execution of all shell commands\n"
-  "\nARGUMENTS:\n"
-  "  --help\tprint this help\n"
-  "  --verbose -v\tincrease verbosity\n"
-  "  --silent -V\tprint nothing\n"
-  "  --fail -f\twaiting commands to fail\n"
-  "  --status -s\texpected status [default: 0]\n"
-  "  --any -a\tterminate if any of command return expected status\n"
-  "  --exec -e\trun some shell command on success; $1, $2 ... $n - will be subtituted nth command stdout\n"
-  "  --interval -i\tmilliseconds between one round of commands\n"
-  "  --no-exit -E\tdo not exit\n"
-  "\n"
-  "EXAMPLES:\n"
-  "# waiting google (or your internet connection) to fail\n"
-  "  await 'curl google.com --fail'\n\n"
-  "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
-  "  await 'curl google.com --status 7\n\n"
-  "# waits for redis socket and then connects to\n"
-  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
-  "# daily checking am I on french reviera. Just in case\n"
-  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
-  "# Yet another http monitor\n"
-  "  await 'curl https://whatnot.ai --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
-  "# waiting for pup's author new blog post\n"
-  "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
-);
-  exit(0);
-}
-
 void clean() {
   for(int i = 0; i < totalCommands; i = i + 1 ){
     fprintf(stderr, "\033[%dA\r\033[K\r", i, i);
@@ -246,6 +215,37 @@ void clean() {
 
 char * stdout_command(char *command) {
   return str_replace("command", str_replace("/", "", command), "/tmp/command.await");
+}
+
+void help() {
+  printf("await [arguments] commands\n\n"
+  "runs list of commands and waits for their termination\n"
+  "\nARGUMENTS:\n"
+  "  --help\t#print this help\n"
+  "  --verbose -v\t#increase verbosity\n"
+  "  --silent -V\t#print nothing\n"
+  "  --fail -f\t#waiting commands to fail\n"
+  "  --status -s\t#expected status [default: 0]\n"
+  "  --any -a\t#terminate if any of command return expected status\n"
+  "  --exec -e\t#run some shell command on success; $1, $2 ... $n - will be subtituted nth command stdout\n"
+  "  --interval -i\t#milliseconds between one round of commands\n"
+  "  --no-exit -E\t#do not exit\n"
+  "\n"
+  "EXAMPLES:\n"
+  "# waiting google (or your internet connection) to fail\n"
+  "  await 'curl google.com --fail'\n\n"
+  "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
+  "  await 'curl google.com --status 7'\n\n"
+  "# waits for redis socket and then connects to\n"
+  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
+  "# daily checking am I on french reviera. Just in case\n"
+  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
+  "# Yet another http monitor\n"
+  "  await 'curl https://whatnot.ai' --forever --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
+  // "# waiting for pup's author new blog post\n"
+  // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
+);
+  exit(0);
 }
 
 int main(int argc, char *argv[]){
