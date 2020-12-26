@@ -48,7 +48,7 @@ char* replace(const char* oldW, const char* newW, const char* s) {
     return result;
 }
 
-static void skeleton_daemon()
+static void daemonize()
 {
     pid_t pid;
     pid = fork();
@@ -114,15 +114,20 @@ char *commands[100];
 char *out[100];
 size_t outPos[100];
 
-int expectedStatus = 0;
-int any = 0;
-static int silent = 0;
-static int forever = 0;
-static int daemonize = 0;
-static int interval = 200;
-static int fail = 0;
-static int verbose = 0;
-static char *onSuccess;
+struct ARGS {
+  int expectedStatus;
+  int interval;
+  int any;
+  int change;
+  int silent;
+  int forever;
+  int daemonize;
+  int fail;
+  int verbose;
+  char *onSuccess;
+};
+struct ARGS args = {.interval=200};
+
 int totalCommands = 0;
 
 
@@ -142,8 +147,8 @@ void spin(char *command, int color, int i) {
 #define BUF_SIZE 1024
 #define CHUNK_SIZE BUF_SIZE * 10
 
-int shell(int i) {
-  if(!silent) spin(commands[i], 7, i);
+int * shell(int i) {
+  if(!args.silent) spin(commands[i], 7, i);
   char buf[BUF_SIZE];
   fflush(stdout);
   fflush(stderr);
@@ -163,10 +168,14 @@ int shell(int i) {
     }
 
     sprintf(out[i], "%s%s", out[i], buf);
-    if (!silent && verbose) printf("\n\n%s", buf);
+    if (!args.silent && args.verbose) printf("\n\n%s", buf);
   }
 
-  return WEXITSTATUS(pclose(fp));
+  static int s[2];
+  s[0] = WEXITSTATUS(pclose(fp));
+  s[1] = 0;
+
+  return s;
 }
 
 void help() {
@@ -206,29 +215,28 @@ void help() {
   exit(0);
 }
 
-void args(int argc, char *argv[]) {
+void parse_args(int argc, char *argv[]) {
     int c;
 
     while (1)
       {
         static struct option long_options[] =
           {
-            /* These options set a flag. */
             {"verbose", no_argument,       0, 'v'},
             {"silent",  no_argument,       0, 'V'},
             {"any",    no_argument,        0, 'a'},
             {"fail",    no_argument,       0, 'f'},
             {"forever", no_argument,       0, 'F'},
+            {"change", no_argument,       0, 'c'},
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
-            {"help",       no_argument,       0, 'h'},
+            {"help",       no_argument,   0, 'h'},
             {"daemon", no_argument,       0, 'd'},
-            {0,0}
           };
         int option_index = 0;
 
-        c = getopt_long (argc, argv, "e:vVs:ai:dFf", long_options, &option_index);
+        c = getopt_long (argc, argv, "e:vVs:ai:dFfc", long_options, &option_index);
 
         if (c == -1)
           break;
@@ -245,27 +253,23 @@ void args(int argc, char *argv[]) {
             printf ("\n");
             break;
 
-          case 'V': silent = 1; break;
-          case 'v': verbose = 1; break;
-          case 'e': onSuccess=optarg; break;
-          case 's': expectedStatus=atoi(optarg); break;
-          case 'f': fail = 1; break;
-          case 'a': any = 1; break;
-          case 'F': forever = 1; break;
-          case 'i': interval = atoi(optarg); break;
-          case 'h': help(); break;
-          case 'd':
-            daemonize = 1;
-            break;
-          case '?':
-            break;
-
+          case 'V': args.silent = 1; break;
+          case 'v': args.verbose = 1; break;
+          case 'e': args.onSuccess=optarg; break;
+          case 's': args.expectedStatus=atoi(optarg); break;
+          case 'f': args.fail = 1; break;
+          case 'a': args.any = 1; break;
+          case 'F': args.forever = 1; break;
+          case 'c': args.change = 1; break;
+          case 'i': args.interval = atoi(optarg); break;
+          case 'd': args.daemonize = 1; break;
+          case 'h': case '?': help(); break;
           default:
             abort ();
           }
       }
 
-    if (!onSuccess && daemonize) {
+    if (!args.onSuccess && args.daemonize) {
       printf("--daemon is meaningless without --exec 'command'");
     }
     while (optind < argc)
@@ -275,11 +279,11 @@ void args(int argc, char *argv[]) {
 }
 
 int main(int argc, char *argv[]){
-  args(argc, argv);
-  if (daemonize) skeleton_daemon();
+  parse_args(argc, argv);
+  if (args.daemonize) daemonize();
 
   int status = -1;
-  int exit = -1;
+  int _exit = -1;
   FILE *fp;
 
   for(int i = 0; i < totalCommands; i = i + 1 ){
@@ -287,28 +291,31 @@ int main(int argc, char *argv[]){
   }
 
   while (1) {
-    exit = 1;
+    _exit = 1;
     for(int i = 0; i < totalCommands; i = i + 1 ){
-      status = shell(i);
-      int done = ((fail && status != 0) || (!fail && status == expectedStatus));
-      if(!silent) spin(commands[i], status == expectedStatus ? 2 : 1, i);
+      int *s = shell(i);
+      status = s[0];
+      int change = s[1];
+
+      int done = ((args.fail && status != 0) || (!args.fail && status == args.expectedStatus));
+      if(!args.silent) spin(commands[i], status == args.expectedStatus ? 2 : 1, i);
       syslog (LOG_NOTICE, "%d %s", status, commands[i]);
-      if (done && any && !forever) break;
-      if (!done) exit = 0;
+      if (done && args.any && !args.forever) break;
+      if (!done) _exit = 0;
       fflush(stderr);
     }
-    if (exit == 1) {
-      if (onSuccess) {
+    if (_exit == 1) {
+      if (args.onSuccess) {
         for(int i = 0; i < totalCommands; i = i + 1) {
           char C[5];
           // sprintf(C, "\\%d", i+1);
-          onSuccess = replace(C, out[i], onSuccess);
+          args.onSuccess = replace(C, out[i], args.onSuccess);
         }
         clean();
-        system(onSuccess);
+        system(args.onSuccess);
       }
-      if (!forever) break; else msleep(interval);
-    } else msleep(interval);
+      if (!args.forever) break; else msleep(args.interval);
+    } else msleep(args.interval);
   }
   for(int i = 0; i < totalCommands; i = i + 1 ){
     free(out[i]);
