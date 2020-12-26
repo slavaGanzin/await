@@ -296,7 +296,6 @@ int main(int argc, char *argv[]){
       int *s = shell(i);
       status = s[0];
       int change = s[1];
-
       int done = ((args.fail && status != 0) || (!args.fail && status == args.expectedStatus));
       if(!args.silent) spin(commands[i], status == args.expectedStatus ? 2 : 1, i);
       syslog (LOG_NOTICE, "%d %s", status, commands[i]);

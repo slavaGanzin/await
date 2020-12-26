@@ -1,5 +1,10 @@
 # await
-![](demo.gif)
+*runs list of commands and waits for their termination*
+
+### Examples
+#### Healthcheck FAANG
+![](demo1.gif)
+
 
 ## Installation
 ```bash
