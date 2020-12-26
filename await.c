@@ -291,8 +291,6 @@ int main(int argc, char *argv[]){
   int not_done;
   while (1) {
     not_done = 0;
-    // fprintf(stderr, "\033[%dB", args.nCommands);
-
     for(int i = 0; i < args.nCommands; i++) {
       int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
       fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);

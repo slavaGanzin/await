@@ -3,15 +3,13 @@
 echo """# await
 *runs list of commands and waits for their termination*
 
+## Installation
+Just download await binary from here https://github.com/slavaGanzin/await/releases/tag/0.9
+
 ### Examples
 #### Healthcheck FAANG
 <img src='demo1.gif' width='100%'/>
 
-
-## Installation
-\`\`\`bash
-curl https://github.com/slavaGanzin/await/releases/tag/0.9/await -o /usr/local/bin/await
-\`\`\`
 
 ## --help
 \`\`\`bash
