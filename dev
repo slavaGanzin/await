@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+while inotifywait --include ".c" -qre close_write --format '' .; do
+  eval "./build && await "$@""
+done
