@@ -1,16 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <errno.h>
 #include <string.h>
-#include <regex.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <signal.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <syslog.h>
-#include <string.h>
+#include <threads.h>
 
 char* replace(const char* oldW, const char* newW, const char* s) {
     char* result;
@@ -108,13 +104,20 @@ int msleep(long msec)
     return res;
 }
 
+thrd_t thread;
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
-int spinnerI[100];
-char *commands[100];
-char *out[100];
-size_t outPos[100];
+typedef struct {
+  int spinner;
+  char *command;
+  char *out;
+  size_t outPos;
+  int status;
+  int changed;
+} COMMAND;
 
-struct ARGS {
+COMMAND c[100];
+
+typedef struct {
   int expectedStatus;
   int interval;
   int any;
@@ -125,57 +128,48 @@ struct ARGS {
   int fail;
   int verbose;
   char *onSuccess;
-};
-struct ARGS args = {.interval=200};
+  int nCommands;
+} ARGS;
+ARGS args = {.interval=200, .expectedStatus = 0};
 
-int totalCommands = 0;
-
-
-void clean() {
-  for(int i = 0; i < totalCommands; i = i + 1 ){
-    fprintf(stderr, "\033[%dB\r\033[K\r\033[%dA", i, i);
-  }
-  fflush(stderr);
-}
-
-void spin(char *command, int color, int i) {
-  if (!spinnerI[i] || spinnerI[i] == 0) spinnerI[i] = 7;
-  fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[spinnerI[i]--], command, i);
-  fflush(stderr);
-}
+// void clean() {
+//   for(int i = 0; i < totalCommands; i = i + 1 ){
+//     fprintf(stderr, "\033[%dB\r\033[K\r\033[%dA", i, i);
+//   }
+//   fflush(stderr);
+// }
 
 #define BUF_SIZE 1024
 #define CHUNK_SIZE BUF_SIZE * 10
 
-int * shell(int i) {
-  if(!args.silent) spin(commands[i], 7, i);
-  char buf[BUF_SIZE];
-  fflush(stdout);
-  fflush(stderr);
+int shell(void * arg) {
+  COMMAND *c = (COMMAND*)arg;
+  c->out = malloc(CHUNK_SIZE * sizeof(char));
+  while (1) {
+    char buf[BUF_SIZE];
+    c->outPos = 0;
+    strcpy(c->out, "");
+    FILE *fp = popen(c->command, "r");
+    if (!fp) exit(EXIT_FAILURE);
 
-  outPos[i] = 0;
-  strcpy(out[i], "");
+    while (fgets(buf, BUF_SIZE, fp) !=NULL) {
+      c->outPos += BUF_SIZE;
+      if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
+        c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+      }
 
-  FILE *fp;
-  fp = popen(commands[i], "r");
-  if (!fp) exit(EXIT_FAILURE);
-  if (fp == NULL) /* Handle error */;
-
-  while (fgets(buf, BUF_SIZE, fp) !=NULL) {
-    outPos[i] += BUF_SIZE;
-    if (outPos[i] % CHUNK_SIZE > CHUNK_SIZE*0.8) {
-      out[i] = realloc(out[i], outPos[i] + outPos[i] % CHUNK_SIZE + CHUNK_SIZE);
+      sprintf(c->out, "%s%s", c->out, buf);
+      if (!args.silent && args.verbose) printf("\n\n%s", buf);
     }
 
-    sprintf(out[i], "%s%s", out[i], buf);
-    if (!args.silent && args.verbose) printf("\n\n%s", buf);
+    if (!c->spinner || c->spinner == 0) c->spinner = 7;
+    c->spinner--;
+    c->status = WEXITSTATUS(pclose(fp));
+    c->changed = 0;
+    syslog (LOG_NOTICE, "%d %s", c->status, c->command);
+    msleep(args.interval);
   }
-
-  static int s[2];
-  s[0] = WEXITSTATUS(pclose(fp));
-  s[1] = 0;
-
-  return s;
+  return 0;
 }
 
 void help() {
@@ -189,7 +183,7 @@ void help() {
   "  --status -s\t#expected status [default: 0]\n"
   "  --any -a\t#terminate if any of command return expected status\n"
   "  --exec -e\t#run some shell command on success;\n"
-  "               \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
+  "           \t# \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
   "  --no-exit -E\t#do not exit\n"
   "\n"
@@ -216,7 +210,7 @@ void help() {
 }
 
 void parse_args(int argc, char *argv[]) {
-    int c;
+    int getopt;
 
     while (1)
       {
@@ -236,12 +230,12 @@ void parse_args(int argc, char *argv[]) {
           };
         int option_index = 0;
 
-        c = getopt_long (argc, argv, "e:vVs:ai:dFfc", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "e:vVs:ai:dFfc", long_options, &option_index);
 
-        if (c == -1)
+        if (getopt == -1)
           break;
 
-        switch (c)
+        switch (getopt)
           {
           case 0:
             /* If this option set a flag, do nothing else now. */
@@ -272,52 +266,56 @@ void parse_args(int argc, char *argv[]) {
     if (!args.onSuccess && args.daemonize) {
       printf("--daemon is meaningless without --exec 'command'");
     }
-    while (optind < argc)
-      commands[totalCommands++] = argv[optind++];
+    args.nCommands = 0;
+    while (optind < argc) {
+      c[args.nCommands++].command = argv[optind++];
+    }
 
-    if (totalCommands == 0) help();
+    if (args.nCommands == 0) help();
 }
 
+
 int main(int argc, char *argv[]){
+  thrd_t thread;
+
   parse_args(argc, argv);
   if (args.daemonize) daemonize();
 
-  int status = -1;
-  int _exit = -1;
   FILE *fp;
 
-  for(int i = 0; i < totalCommands; i = i + 1 ){
-    out[i] = malloc(CHUNK_SIZE * sizeof(char));
+  for(int i = 0; i < args.nCommands; i++) {
+    c[i].status = -1;
+    thrd_create(&thread, shell, &c[i]);
   }
 
+  int not_done;
   while (1) {
-    _exit = 1;
-    for(int i = 0; i < totalCommands; i = i + 1 ){
-      int *s = shell(i);
-      status = s[0];
-      int change = s[1];
-      int done = ((args.fail && status != 0) || (!args.fail && status == args.expectedStatus));
-      if(!args.silent) spin(commands[i], status == args.expectedStatus ? 2 : 1, i);
-      syslog (LOG_NOTICE, "%d %s", status, commands[i]);
-      if (done && args.any && !args.forever) break;
-      if (!done) _exit = 0;
+    not_done = 0;
+    // fprintf(stderr, "\033[%dB", args.nCommands);
+
+    for(int i = 0; i < args.nCommands; i++) {
+      int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
+      fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
       fflush(stderr);
+      not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
     }
-    if (_exit == 1) {
+
+    fflush(stdout);
+    if (not_done == 0) {
       if (args.onSuccess) {
-        for(int i = 0; i < totalCommands; i = i + 1) {
+        for(int i = 0; i < args.nCommands; i = i + 1) {
           char C[5];
-          // sprintf(C, "\\%d", i+1);
-          args.onSuccess = replace(C, out[i], args.onSuccess);
+          args.onSuccess = replace(C, c[i].out, args.onSuccess);
         }
-        clean();
         system(args.onSuccess);
       }
-      if (!args.forever) break; else msleep(args.interval);
-    } else msleep(args.interval);
+      if (!args.forever) {
+        fprintf(stderr, "\033[%dB", args.nCommands);
+        exit(0);
+      }
+    }
+    msleep(40);
   }
-  for(int i = 0; i < totalCommands; i = i + 1 ){
-    free(out[i]);
-  }
+  for(int i = 0; i < args.nCommands; i = i + 1 ) free(c);
   closelog();
 }
