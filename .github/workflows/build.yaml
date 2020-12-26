@@ -14,8 +14,8 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - name: gcc
-      run: gcc await.c -o await
+    - name: build
+      run: ./build
 
     - name: Upload binaries to release
       uses: svenstaro/upload-release-action@v2

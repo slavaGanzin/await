@@ -3,7 +3,7 @@
 
 ### Examples
 #### Healthcheck FAANG
-![](demo1.gif)
+<img src='demo1.gif' width='100%'/>
 
 
 ## Installation
@@ -25,7 +25,7 @@ ARGUMENTS:
   --status -s	#expected status [default: 0]
   --any -a	#terminate if any of command return expected status
   --exec -e	#run some shell command on success;
-               \1, \2 ... \n - will be subtituted nth command stdout
+           	# \1, \2 ... \n - will be subtituted nth command stdout
   --interval -i	#milliseconds between one round of commands [default: 200]
   --no-exit -E	#do not exit
 

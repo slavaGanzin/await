@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-gcc await.c -o await
+./build
 echo """# await
 *runs list of commands and waits for their termination*
 
 ### Examples
 #### Healthcheck FAANG
-![](demo1.gif)
+<img src='demo1.gif' width='100%'/>
 
 
 ## Installation
@@ -19,4 +19,5 @@ $(./await --help)
 
 \`\`\`
 """ > README.md
-git add .
+git add README.md
+cp await /usr/local/bin/await
