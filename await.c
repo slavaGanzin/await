@@ -209,8 +209,8 @@ void help() {
   "\n\nNOTES:\n"
   "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
   "# you can use stdout substitution in --exec and in commands itself:\n"
-  "  await 'echo 2' 'echo 2' 'expr \\1 + \\2' --exec 'echo \\3'\n"
-
+  "  await 'echo -n 10' 'echo -n $RANDOM' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent"
+  "\n"
   "\n\nEXAMPLES:\n"
   "# waiting google (or your internet connection) to fail\n"
   "  await 'curl google.com' --fail\n\n"

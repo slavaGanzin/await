@@ -68,7 +68,7 @@ OPTIONS:
 NOTES:
 # \1, \2 ... \n - will be subtituted with n-th command stdout
 # you can use stdout substitution in --exec and in commands itself:
-  await 'echo 2' 'echo 2' 'expr \1 + \2' --exec 'echo \3'
+  await 'echo -n 10' 'echo -n $RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent
 
 
 EXAMPLES:
