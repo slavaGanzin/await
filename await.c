@@ -140,8 +140,8 @@ ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommand
 //   fflush(stderr);
 // }
 
-#define BUF_SIZE 1024
-#define CHUNK_SIZE BUF_SIZE * 10
+int const BUF_SIZE = 1024;
+int const CHUNK_SIZE = BUF_SIZE * 100;
 
 char * replace_outs(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
@@ -165,10 +165,10 @@ int shell(void * arg) {
     c->outPos = 0;
     strcpy(c->out, "");
     FILE *fp = popen(replace_outs(c->command), "r");
-    if (!fp) exit(EXIT_FAILURE);
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
       c->outPos += BUF_SIZE;
+
       if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
         c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
         c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
@@ -330,6 +330,5 @@ int main(int argc, char *argv[]){
     }
     msleep(40);
   }
-  for(int i = 0; i < args.nCommands; i = i + 1 ) free(c);
   closelog();
 }
