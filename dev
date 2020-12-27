@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+eval './build && await "$1" "$2" "$3" "$4" "$5" "$5"' &
+pid=$!
 while inotifywait --include ".c" -qre close_write --format '' .; do
-  eval "./build && await "$@""
+  kill $pid
+  eval './build && await "$1" "$2" "$3" "$4" "$5" "$5"' &
+  pid=$!
 done

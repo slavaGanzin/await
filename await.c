@@ -112,7 +112,7 @@ typedef struct {
   char *out;
   size_t outPos;
   int status;
-  int changed;
+  int change;
 } COMMAND;
 
 COMMAND c[100];
@@ -165,7 +165,7 @@ int shell(void * arg) {
     if (!c->spinner || c->spinner == 0) c->spinner = 7;
     c->spinner--;
     c->status = WEXITSTATUS(pclose(fp));
-    c->changed = 0;
+    c->change = 0;
     syslog (LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
   }
@@ -299,7 +299,7 @@ int main(int argc, char *argv[]){
     }
 
     fflush(stdout);
-    if (not_done == 0) {
+    if (not_done == 0 || args.any && not_done < args.nCommands) {
       if (args.onSuccess) {
         for(int i = 0; i < args.nCommands; i = i + 1) {
           char C[5];
