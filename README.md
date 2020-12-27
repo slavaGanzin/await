@@ -20,7 +20,7 @@ await 'whois facebook.com' \
 <img src='demo/1.gif' width='100%'></img>
 
 
-### Healthcheck your site and notify yourself on status change
+### Notify yourself when your site down
 ```bash
 await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" \
       --forever --fail --exec "ntfy send 'whatnot.ai \1'"
@@ -44,6 +44,12 @@ await 'echo -n 10' 'echo -n $RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever -
 
 <img src='demo/4.gif' width='100%'></img>
 
+### Furiously wait for new iPhone in background process
+```bash
+await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12' --interval 1000 --change --daemon --exec 'ntfy send "\1"'
+```
+
+<img src='demo/5.gif' width='100%'></img>
 
 
 ## --help
@@ -93,7 +99,7 @@ EXAMPLES:
 
 # waiting for new iPhone in daemon mode
   await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
-    --interval 86400 --daemon --exec "ntfy send "
+    --interval 86400 --daemon --exec "ntfy send \1"
 
 ```
 

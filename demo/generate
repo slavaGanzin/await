@@ -16,7 +16,12 @@
 # chromium demo/3.gif
 #
 
-echo "await 'echo -n 10' 'echo -n \$RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent" | xclip
-terminalizer record demo/4 --skip-sharing --command fish --config demo/template
-terminalizer render demo/4 -o demo/4.gif
-chromium demo/4.gif
+# echo "await 'echo -n 10' 'echo -n \$RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent" | xclip
+# terminalizer record demo/4 --skip-sharing --command fish --config demo/template
+# terminalizer render demo/4 -o demo/4.gif
+# chromium demo/4.gif
+
+echo "await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 1000 --change --daemon --exec 'ntfy send \"\1\"'" | xclip
+terminalizer record demo/5 --skip-sharing --command fish --config demo/template
+terminalizer render demo/5 -o demo/5.gif
+chromium demo/5.gif

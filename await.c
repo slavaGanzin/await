@@ -229,7 +229,7 @@ void help() {
   "\n\n"
   "# waiting for new iPhone in daemon mode"
   "\n"
-  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n    --interval 86400 --daemon --exec \"ntfy send \1\""
+  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n    --interval 86400 --daemon --exec \"ntfy send \\1\""
   "\n\n"
 
   // "# waiting for pup's author new blog post\n"
