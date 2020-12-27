@@ -22,7 +22,7 @@ await 'whois facebook.com' \\
 <img src='demo/1.gif' width='100%'></img>
 
 
-### Healthcheck your site
+### Healthcheck your site and notify yourself on status change
 \`\`\`bash
 await \"curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN\" \\
       --forever --fail --exec \"ntfy send 'whatnot.ai \1'\"
