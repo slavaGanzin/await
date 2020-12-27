@@ -99,7 +99,7 @@ EXAMPLES:
 
 # waiting for new iPhone in daemon mode
   await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
-    --interval 86400 --daemon --exec "ntfy send \1"
+ --change --interval 86400 --daemon --exec "ntfy send \1"
 
 ```
 
