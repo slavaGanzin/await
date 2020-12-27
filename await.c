@@ -146,9 +146,11 @@ ARGS args = {.interval=200, .expectedStatus = 0, .silent=0};
 int shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   c->out = malloc(CHUNK_SIZE * sizeof(char));
-  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
-  strcpy(c->previousOut, "first run");
+  if (args.change) {
+    c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+    strcpy(c->previousOut, "first run");
+  }
 
   while (1) {
     char buf[BUF_SIZE];
@@ -161,7 +163,7 @@ int shell(void * arg) {
       c->outPos += BUF_SIZE;
       if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
         c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
-        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+        if (args.change) c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
       }
 
       sprintf(c->out, "%s%s", c->out, buf);
@@ -172,8 +174,11 @@ int shell(void * arg) {
     c->spinner--;
     c->status = WEXITSTATUS(pclose(fp));
 
-    if (strcmp(c->previousOut, "first run")) c->change = strcmp(c->out, c->previousOut);
-    strcpy(c->previousOut, c->out);
+    if (args.change) {
+      if (strcmp(c->previousOut, "first run")) c->change = strcmp(c->out, c->previousOut);
+      strcpy(c->previousOut, c->out);
+    }
+
     syslog (LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
   }
@@ -320,7 +325,7 @@ int main(int argc, char *argv[]){
         system(args.onSuccess);
       }
       if (!args.forever) {
-        fprintf(stderr, "\033[%dB", args.nCommands);
+        // fprintf(stderr, "\033[%dB", args.nCommands);
         exit(0);
       }
     }
