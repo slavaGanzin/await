@@ -145,9 +145,10 @@ ARGS args = {.interval=200, .expectedStatus = 0, .silent=0};
 
 char * replace_outs(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
+    if (!c[i].previousOut || !strcmp(c->previousOut, "first run")) break;
     char C[3];
     sprintf(C, "\\%d", i+1);
-    if (c[i].out) string = replace(C, c[i].out, string);
+    string = replace(C, c[i].previousOut, string);
   }
   return string;
 }
@@ -156,10 +157,8 @@ int shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   c->out = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
-  if (args.change) {
-    c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
-    strcpy(c->previousOut, "first run");
-  }
+  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  strcpy(c->previousOut, "first run");
 
   while (1) {
     char buf[BUF_SIZE];
@@ -172,7 +171,7 @@ int shell(void * arg) {
       c->outPos += BUF_SIZE;
       if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
         c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
-        if (args.change) c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
       }
 
       sprintf(c->out, "%s%s", c->out, buf);
@@ -183,10 +182,8 @@ int shell(void * arg) {
     c->spinner--;
     c->status = WEXITSTATUS(pclose(fp));
 
-    if (args.change) {
-      if (strcmp(c->previousOut, "first run")) c->change = strcmp(c->out, c->previousOut);
-      strcpy(c->previousOut, c->out);
-    }
+    if (!strcmp(c->previousOut, "first run")) c->change = strcmp(c->out, c->previousOut);
+    strcpy(c->previousOut, c->out);
 
     syslog (LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
@@ -207,12 +204,12 @@ void help() {
   "  --change -c\t#waiting for stdout to change and ignore status codes\n"
   "  --exec -e\t#run some shell command on success;\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
-  "  --no-exit -E\t#do not exit\n"
+  "  --forever -F\t#do not exit ever\n"
 
   "\n\nNOTES:\n"
   "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
   "# you can use stdout substitution in --exec and in commands itself:\n"
-  "  await 'date' 'echo \\1' --exec 'echo \\2'\n"
+  "  await 'echo 2' 'echo 2' 'expr \\1 + \\2' --exec 'echo \\3'\n"
 
   "\n\nEXAMPLES:\n"
   "# waiting google (or your internet connection) to fail\n"

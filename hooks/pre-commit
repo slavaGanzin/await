@@ -11,29 +11,40 @@ chmod +x /usr/local/bin/await
 
 ## You can
 ### Healthcheck FAANG
+\`\`\`bash
+await 'whois facebook.com' \\
+      'nslookup apple.com' \\
+      'dig +short amazon.com' \\
+      'sleep 1 | telnet netflix.com 443 2>/dev/null' \\
+      'http google.com' --fail
+\`\`\`
 
 <img src='demo/1.gif' width='100%'></img>
 
-\`\`\`bash
-await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com' --fail
-\`\`\`
 
 ### Healthcheck your site
+\`\`\`bash
+await \"curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN\" \\
+      --forever --fail --exec \"ntfy send 'whatnot.ai \1'\"
+\`\`\`
 
 <img src='demo/2.gif' width='100%'></img>
 
-\`\`\`bash
-await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" --forever --fail --exec "ntfy send 'whatnot.ai \1'"
-\`\`\`
-
-
 ### Use as [concurrently](https://github.com/kimmobrunfeldt/concurrently)
+\`\`\`bash
+await \"stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl\" \\
+      \"pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null\" --forever --stdout --silent
+\`\`\`
 
 <img src='demo/3.gif' width='100%'></img>
 
+
+### [Substitute while substituting](https://memegenerator.net/img/instances/48173775.jpg)
 \`\`\`bash
-await "stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl" "pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null" --forever --stdout --silent
+await 'echo -n 10' 'echo -n \$RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent
 \`\`\`
+
+<img src='demo/4.gif' width='100%'></img>
 
 
 

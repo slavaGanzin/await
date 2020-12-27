@@ -10,7 +10,13 @@
 # terminalizer render demo/2 -o demo/2.gif
 # chromium demo/2.gif
 
-echo 'await "stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl" "pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null" --forever --stdout --silent' | xclip
-terminalizer record demo/3 --skip-sharing --command fish --config demo/template
-terminalizer render demo/3 -o demo/3.gif
-chromium demo/3.gif
+# echo 'await "stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl" "pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null" --forever --stdout --silent' | xclip
+# terminalizer record demo/3 --skip-sharing --command fish --config demo/template
+# terminalizer render demo/3 -o demo/3.gif
+# chromium demo/3.gif
+#
+
+echo "await 'echo -n 10' 'echo -n \$RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent" | xclip
+terminalizer record demo/4 --skip-sharing --command fish --config demo/template
+terminalizer render demo/4 -o demo/4.gif
+chromium demo/4.gif

@@ -9,11 +9,40 @@ chmod +x /usr/local/bin/await
 
 ## You can
 ### Healthcheck FAANG
-
-<img src='demo/1.gif' width='100%'/>
 ```bash
-await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com' --fail
+await 'whois facebook.com' \
+      'nslookup apple.com' \
+      'dig +short amazon.com' \
+      'sleep 1 | telnet netflix.com 443 2>/dev/null' \
+      'http google.com' --fail
 ```
+
+<img src='demo/1.gif' width='100%'></img>
+
+
+### Healthcheck your site
+```bash
+await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" \
+      --forever --fail --exec "ntfy send 'whatnot.ai \1'"
+```
+
+<img src='demo/2.gif' width='100%'></img>
+
+### Use as [concurrently](https://github.com/kimmobrunfeldt/concurrently)
+```bash
+await "stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl" \
+      "pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null" --forever --stdout --silent
+```
+
+<img src='demo/3.gif' width='100%'></img>
+
+
+### [Substitute while substituting](https://memegenerator.net/img/instances/48173775.jpg)
+```bash
+await 'echo -n 10' 'echo -n $RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent
+```
+
+<img src='demo/4.gif' width='100%'></img>
 
 
 
@@ -25,7 +54,7 @@ await [arguments] commands
 
 OPTIONS:
   --help	#print this help
-  --verbose -v	#increase verbosity
+  --stdout -o	#print stdout of commands
   --silent -V	#print nothing
   --fail -f	#waiting commands to fail
   --status -s	#expected status [default: 0]
@@ -33,13 +62,13 @@ OPTIONS:
   --change -c	#waiting for stdout to change and ignore status codes
   --exec -e	#run some shell command on success;
   --interval -i	#milliseconds between one round of commands [default: 200]
-  --no-exit -E	#do not exit
+  --forever -F	#do not exit ever
 
 
 NOTES:
 # \1, \2 ... \n - will be subtituted with n-th command stdout
 # you can use stdout substitution in --exec and in commands itself:
-  await 'date' 'echo \1' --exec 'echo \2'
+  await 'echo 2' 'echo 2' 'expr \1 + \2' --exec 'echo \3'
 
 
 EXAMPLES:
@@ -59,11 +88,12 @@ EXAMPLES:
   await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400
 
 # Yet another server monitor
-  await 'http https://whatnot.ai' --forever --fail --exec "ntfy send \'whatnot.ai down\'"'
+  await "curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'" --forever --fail\
+    --exec "ntfy send \'whatnot.ai \1\'"
 
 # waiting for new iPhone in daemon mode
   await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
- --interval 86400 --daemon --exec "ntfy send " 
+    --interval 86400 --daemon --exec "ntfy send "
 
 ```
 
