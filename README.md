@@ -4,9 +4,10 @@
 ## Installation
 Just download await binary from here https://github.com/slavaGanzin/await/releases/tag/0.9
 
-### Examples
-#### Healthcheck FAANG
+## You can
+### Healthcheck FAANG
 <img src='demo1.gif' width='100%'/>
+
 
 
 ## --help
@@ -22,6 +23,7 @@ ARGUMENTS:
   --fail -f	#waiting commands to fail
   --status -s	#expected status [default: 0]
   --any -a	#terminate if any of command return expected status
+  --change -c	#waiting for stdout to change and ignore status codes
   --exec -e	#run some shell command on success;
            	# \1, \2 ... \n - will be subtituted nth command stdout
   --interval -i	#milliseconds between one round of commands [default: 200]

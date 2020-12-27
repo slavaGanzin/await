@@ -6,9 +6,10 @@ echo """# await
 ## Installation
 Just download await binary from here https://github.com/slavaGanzin/await/releases/tag/0.9
 
-### Examples
-#### Healthcheck FAANG
+## You can
+### Healthcheck FAANG
 <img src='demo1.gif' width='100%'/>
+
 
 
 ## --help

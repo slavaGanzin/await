@@ -110,6 +110,7 @@ typedef struct {
   int spinner;
   char *command;
   char *out;
+  char *previousOut;
   size_t outPos;
   int status;
   int change;
@@ -130,7 +131,7 @@ typedef struct {
   char *onSuccess;
   int nCommands;
 } ARGS;
-ARGS args = {.interval=200, .expectedStatus = 0};
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0};
 
 // void clean() {
 //   for(int i = 0; i < totalCommands; i = i + 1 ){
@@ -145,6 +146,10 @@ ARGS args = {.interval=200, .expectedStatus = 0};
 int shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   c->out = malloc(CHUNK_SIZE * sizeof(char));
+  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  strcpy(c->out, "");
+  strcpy(c->previousOut, "first run");
+
   while (1) {
     char buf[BUF_SIZE];
     c->outPos = 0;
@@ -156,6 +161,7 @@ int shell(void * arg) {
       c->outPos += BUF_SIZE;
       if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
         c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
       }
 
       sprintf(c->out, "%s%s", c->out, buf);
@@ -165,7 +171,9 @@ int shell(void * arg) {
     if (!c->spinner || c->spinner == 0) c->spinner = 7;
     c->spinner--;
     c->status = WEXITSTATUS(pclose(fp));
-    c->change = 0;
+
+    if (strcmp(c->previousOut, "first run")) c->change = strcmp(c->out, c->previousOut);
+    strcpy(c->previousOut, c->out);
     syslog (LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
   }
@@ -182,6 +190,7 @@ void help() {
   "  --fail -f\t#waiting commands to fail\n"
   "  --status -s\t#expected status [default: 0]\n"
   "  --any -a\t#terminate if any of command return expected status\n"
+  "  --change -c\t#waiting for stdout to change and ignore status codes\n"
   "  --exec -e\t#run some shell command on success;\n"
   "           \t# \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
@@ -292,10 +301,12 @@ int main(int argc, char *argv[]){
   while (1) {
     not_done = 0;
     for(int i = 0; i < args.nCommands; i++) {
-      int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
-      fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
-      fflush(stderr);
-      not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+      if (!args.silent) {
+        int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
+        fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
+        fflush(stderr);
+      }
+      not_done += (args.change && !c[i].change) || c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
     }
 
     fflush(stdout);
