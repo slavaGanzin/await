@@ -1,0 +1,8 @@
+#!/usr/bin/env fish
+
+echo """await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com'""" | xclip
+
+terminalizer record demo/1 --skip-sharing --command fish --config demo/template
+xdotool key --clearmodifiers ctrl+l
+terminalizer render demo/1 -o demo/1.gif
+chromium demo/1.gif

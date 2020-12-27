@@ -1,5 +1,5 @@
 # await
-*runs list of commands and waits for their termination*
+*runs list of commands in parallel and waits for their termination*
 
 ## Installation
 ```bash
@@ -9,7 +9,11 @@ chmod +x /usr/local/bin/await
 
 ## You can
 ### Healthcheck FAANG
-<img src='demo1.gif' width='100%'/>
+
+<img src='demo/1.gif' width='100%'/>
+```bash
+await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com' --fail
+```
 
 
 
