@@ -1,5 +1,5 @@
 # await
-*24K small footprint single binary runs list of commands in parallel and waits for their termination*
+*24K small memory footprint single binary runs list of commands in parallel and waits for their termination*
 
 # Installation
 ```bash
