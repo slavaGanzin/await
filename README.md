@@ -1,13 +1,13 @@
 # await
-*runs list of commands in parallel and waits for their termination*
+*24K small footprint single binary runs list of commands in parallel and waits for their termination*
 
-## Installation
+# Installation
 ```bash
 curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await -o /usr/local/bin/await
 chmod +x /usr/local/bin/await
 ```
 
-## You can
+# With await you can:
 ### Healthcheck FAANG
 ```bash
 await 'whois facebook.com' \
