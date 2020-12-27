@@ -23,7 +23,7 @@ await [arguments] commands
 
 # runs list of commands and waits for their termination
 
-ARGUMENTS:
+OPTIONS:
   --help	#print this help
   --verbose -v	#increase verbosity
   --silent -V	#print nothing
@@ -32,9 +32,15 @@ ARGUMENTS:
   --any -a	#terminate if any of command return expected status
   --change -c	#waiting for stdout to change and ignore status codes
   --exec -e	#run some shell command on success;
-           	# \1, \2 ... \n - will be subtituted nth command stdout
   --interval -i	#milliseconds between one round of commands [default: 200]
   --no-exit -E	#do not exit
+
+
+NOTES:
+# \1, \2 ... \n - will be subtituted with n-th command stdout
+# you can use stdout substitution in --exec and in commands itself:
+  await 'date' 'echo \1' --exec 'echo \2'
+
 
 EXAMPLES:
 # waiting google (or your internet connection) to fail

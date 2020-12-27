@@ -143,6 +143,15 @@ ARGS args = {.interval=200, .expectedStatus = 0, .silent=0};
 #define BUF_SIZE 1024
 #define CHUNK_SIZE BUF_SIZE * 10
 
+char * replace_outs(char *string) {
+  for(int i = 0; i < args.nCommands; i = i + 1) {
+    char C[3];
+    sprintf(C, "\\%d", i+1);
+    if (c[i].out) string = replace(C, c[i].out, string);
+  }
+  return string;
+}
+
 int shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   c->out = malloc(CHUNK_SIZE * sizeof(char));
@@ -156,7 +165,7 @@ int shell(void * arg) {
     char buf[BUF_SIZE];
     c->outPos = 0;
     strcpy(c->out, "");
-    FILE *fp = popen(c->command, "r");
+    FILE *fp = popen(replace_outs(c->command), "r");
     if (!fp) exit(EXIT_FAILURE);
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
@@ -188,7 +197,7 @@ int shell(void * arg) {
 void help() {
   printf("await [arguments] commands\n\n"
   "# runs list of commands and waits for their termination\n"
-  "\nARGUMENTS:\n"
+  "\nOPTIONS:\n"
   "  --help\t#print this help\n"
   "  --verbose -v\t#increase verbosity\n"
   "  --silent -V\t#print nothing\n"
@@ -197,11 +206,15 @@ void help() {
   "  --any -a\t#terminate if any of command return expected status\n"
   "  --change -c\t#waiting for stdout to change and ignore status codes\n"
   "  --exec -e\t#run some shell command on success;\n"
-  "           \t# \\1, \\2 ... \\n - will be subtituted nth command stdout\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
   "  --no-exit -E\t#do not exit\n"
-  "\n"
-  "EXAMPLES:\n"
+
+  "\n\nNOTES:\n"
+  "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
+  "# you can use stdout substitution in --exec and in commands itself:\n"
+  "  await 'date' 'echo \\1' --exec 'echo \\2'\n"
+
+  "\n\nEXAMPLES:\n"
   "# waiting google (or your internet connection) to fail\n"
   "  await 'curl google.com' --fail\n\n"
   "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
@@ -309,25 +322,15 @@ int main(int argc, char *argv[]){
       if (!args.silent) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
-        fflush(stderr);
       }
       not_done += (args.change && !c[i].change) || c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
     }
+    fflush(stderr);
 
-    fflush(stdout);
     if (not_done == 0 || args.any && not_done < args.nCommands) {
-      if (args.onSuccess) {
-        for(int i = 0; i < args.nCommands; i = i + 1) {
-          char C[3];
-          sprintf(C, "\%d", i+1);
-          args.onSuccess = replace(C, c[i].out, args.onSuccess);
-        }
-        system(args.onSuccess);
-      }
-      if (!args.forever) {
-        // fprintf(stderr, "\033[%dB", args.nCommands);
-        exit(0);
-      }
+      fflush(stdout);
+      if (args.onSuccess) system(replace_outs(args.onSuccess));
+      if (!args.forever) exit(0);
     }
     msleep(40);
   }
