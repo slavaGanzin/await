@@ -131,7 +131,7 @@ typedef struct {
   char *onSuccess;
   int nCommands;
 } ARGS;
-ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0};
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0};
 
 // void clean() {
 //   for(int i = 0; i < totalCommands; i = i + 1 ){
@@ -160,8 +160,8 @@ int shell(void * arg) {
   c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->previousOut, "first run");
 
+  char buf[BUF_SIZE];
   while (1) {
-    char buf[BUF_SIZE];
     c->outPos = 0;
     strcpy(c->out, "");
     FILE *fp = popen(replace_outs(c->command), "r");
@@ -285,13 +285,11 @@ void parse_args(int argc, char *argv[]) {
           }
       }
 
-    if (!args.onSuccess && args.daemonize) {
-      printf("--daemon is meaningless without --exec 'command'");
-    }
-    args.nCommands = 0;
-    while (optind < argc) {
+    if (!args.onSuccess && args.daemonize)
+      printf("NOTICE: --daemon is kinda meaningless without --exec 'command'");
+
+    while (optind < argc)
       c[args.nCommands++].command = argv[optind++];
-    }
 
     if (args.nCommands == 0) help();
 }
@@ -321,12 +319,9 @@ int main(int argc, char *argv[]){
 
       if (args.change) not_done =  !c[i].change;
       else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
-
-      printf("%d %d %d", not_done);
     }
     fflush(stdout);
     fflush(stderr);
-    printf("%d", not_done);
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
       fflush(stdout);
