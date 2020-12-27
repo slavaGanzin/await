@@ -4,7 +4,10 @@ echo """# await
 *runs list of commands and waits for their termination*
 
 ## Installation
-Just download await binary from here https://github.com/slavaGanzin/await/releases/tag/0.9
+\`\`\`bash
+curl -L "https://github.com/slavaGanzin/await/releases/download/0.9/await" -o /usr/local/bin/await
+chmod +x /usr/local/bin/await
+\`\`\`
 
 ## You can
 ### Healthcheck FAANG
