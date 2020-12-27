@@ -302,7 +302,8 @@ int main(int argc, char *argv[]){
     if (not_done == 0 || args.any && not_done < args.nCommands) {
       if (args.onSuccess) {
         for(int i = 0; i < args.nCommands; i = i + 1) {
-          char C[5];
+          char C[3];
+          sprintf(C, "\%d", i+1);
           args.onSuccess = replace(C, c[i].out, args.onSuccess);
         }
         system(args.onSuccess);
