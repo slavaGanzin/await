@@ -21,7 +21,12 @@
 # terminalizer render demo/4 -o demo/4.gif
 # chromium demo/4.gif
 
-echo "await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 1000 --change --daemon --exec 'ntfy send \"\1\"'" | xclip
-terminalizer record demo/5 --skip-sharing --command fish --config demo/template
-terminalizer render demo/5 -o demo/5.gif
-chromium demo/5.gif
+# echo "await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 1000 --change --daemon --exec 'ntfy send \"\1\"'" | xclip
+# terminalizer record demo/5 --skip-sharing --command fish --config demo/template
+# terminalizer render demo/5 -o demo/5.gif
+# chromium demo/5.gif
+
+echo "sudo systemctl restart redis; await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'" | xclip
+terminalizer record demo/6 --skip-sharing --command fish --config demo/template
+terminalizer render demo/6 -o demo/6.gif
+chromium demo/^.gif

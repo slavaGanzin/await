@@ -53,6 +53,13 @@ await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" 
 
 <img src='demo/5.gif' width='100%'></img>
 
+### Restart database and connect immediately after it become fully functional
+\`\`\`bash
+sudo systemctl restart redis; await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'
+\`\`\`
+
+<img src='demo/6.gif' width='100%'></img>
+
 
 ## --help
 \`\`\`bash

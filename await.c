@@ -237,8 +237,7 @@ void parse_args(int argc, char *argv[]) {
     int getopt;
 
     while (1) {
-        static struct option long_options[] =
-          {
+        static struct option long_options[] = {
             {"stdout",  no_argument,       0, 'o'},
             {"silent",  no_argument,       0, 'V'},
             {"any",     no_argument,       0, 'a'},
@@ -280,8 +279,7 @@ void parse_args(int argc, char *argv[]) {
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
           case 'h': case '?': help(); break;
-          default:
-            abort ();
+          default: abort();
           }
       }
 
@@ -295,7 +293,7 @@ void parse_args(int argc, char *argv[]) {
 }
 
 
-int main(int argc, char *argv[]){
+int main(int argc, char *argv[]) {
   thrd_t thread;
 
   parse_args(argc, argv);
@@ -324,7 +322,6 @@ int main(int argc, char *argv[]){
     fflush(stderr);
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
-      fflush(stdout);
       if (args.onSuccess) system(replace_outs(args.onSuccess));
       if (!args.forever) exit(0);
     }

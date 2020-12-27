@@ -1,0 +1,140 @@
+# The configurations that used for the recording, feel free to edit them
+config:
+
+  
+    # Specify a command to be executed
+    # like `/bin/bash -l`, `ls`, or any other commands
+    # the default is bash for Linux
+    # or powershell.exe for Windows
+    command: fish
+  
+    # Specify the current working directory path
+    # the default is the current working directory path
+    cwd: /home/vganzin/github/await
+  
+    # Export additional ENV variables
+    env:
+      recording: true
+  
+    # Explicitly set the number of columns
+    # or use `auto` to take the current
+    # number of columns of your shell
+    cols: 65
+  
+    # Explicitly set the number of rows
+    # or use `auto` to take the current
+    # number of rows of your shell
+    rows: 16
+  
+    # Amount of times to repeat GIF
+    # If value is -1, play once
+    # If value is 0, loop indefinitely
+    # If value is a positive number, loop n times
+    repeat: 0
+  
+    # Quality
+    # 1 - 100
+    quality: 100
+  
+    # Delay between frames in ms
+    # If the value is `auto` use the actual recording delays
+    frameDelay: auto
+  
+    # Maximum delay between frames in ms
+    # Ignored if the `frameDelay` isn't set to `auto`
+    # Set to `auto` to prevent limiting the max idle time
+    maxIdleTime: 2000
+  
+    # The surrounding frame box
+    # The `type` can be null, window, floating, or solid`
+    # To hide the title use the value null
+    # Don't forget to add a backgroundColor style with a null as type
+    frameBox:
+      type: floating
+      title:
+      style:
+        border: 0px black solid
+        # boxShadow: none
+        # margin: 0px
+  
+    # Add a watermark image to the rendered gif
+    # You need to specify an absolute path for
+    # the image on your machine or a URL, and you can also
+    # add your own CSS styles
+    watermark:
+      imagePath: null
+      style:
+        position: absolute
+        right: 15px
+        bottom: 15px
+        width: 100px
+        opacity: 0.9
+  
+    # Cursor style can be one of
+    # `block`, `underline`, or `bar`
+    cursorStyle: block
+  
+    # Font family
+    # You can use any font that is installed on your machine
+    # in CSS-like syntax
+    fontFamily: "Lucida Console, Ubuntu Mono, Monospace"
+  
+    # The size of the font
+    fontSize: 15
+  
+    # The height of lines
+    lineHeight: 1
+  
+    # The spacing between letters
+    letterSpacing: 0
+  
+    # Theme
+    theme:
+      background: "transparent"
+      foreground: "#fffff"
+      cursor: "#ffcc00"
+      black: "#262422"
+      red: "#ff0000"
+      green: "#00ff00"
+      yellow: "#ffcc00"
+      blue: "#75dff2"
+      magenta: "#ae89fe"
+      cyan: "#708387"
+      white: "#d5d5d0"
+      brightBlack: "#626566"
+      brightRed: "#ff7fac"
+      brightGreen: "#c8ed71"
+      brightYellow: "#ffcc00"
+      brightBlue: "#75dff2"
+      brightMagenta: "#ae89fe"
+      brightCyan: "#b1c6ca"
+      brightWhite: "#f10f9f4"
+  
+# Records, feel free to edit them
+records:
+  - delay: 371
+    content: "\e]0;fish /home/vganzin/github/await\a\e[38;5;0m\e[m\e(B\e[38;5;237m⏎\e[m\e(B                                                                \r⏎ \r\e[K"
+  - delay: 8
+    content: "\e[1 q\e[?2004h\e]0;fish /home/vganzin/github/await\a\e[38;5;0m\e[m\e(B\e[38;5;81m~/g/await\e[m\e(B \e[38;5;255m\e[K"
+  - delay: 1688
+    content: "\e[1 qsudo systemctl restart redis; await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\r\n\e[K\e[10C\e[1 q\e]0;fish /home/vganzin/github/await\a\e[38;5;0m\e[m\e(B\r\e[A\e[A\e[A\e[38;5;81m~/g/await\e[m\e(B sudo systemctl restart redis; await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\e[K\r\n\e[K\e[10C\e[A\e[A\e[A\e[38;5;197msudo\e[38;5;255m \e[38;5;220msystemctl\e[38;5;255m \e[38;5;220mrestart\e[38;5;255m \e[38;5;220mredis\e[38;5;255m; \e[38;5;197mawait\e[38;5;255m \e[38;5;186m'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock'\e[38;5;255m \e[38;5;220m--exec\e[38;5;255m \e[38;5;186m'redis-cli -s /tmp/redis.sock'\r\n\e[10C\e[38;5;255m"
+  - delay: 530
+    content: "\e[A\b\b; \e[J"
+  - delay: 8
+    content: "\e]0;fish /home/vganzin/github/await\a\e[38;5;0m\e[m\e(B\r\e[A\e[A\e[38;5;81m~/g/await\e[m\e(B \e[38;5;197msudo\e[38;5;255m \e[38;5;220msystemctl\e[38;5;255m \e[38;5;220mrestart\e[38;5;255m \e[38;5;220mredis\e[38;5;255m; \e[38;5;197mawait\e[38;5;255m \e[38;5;186m'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock'\e[38;5;255m \e[38;5;220m--exec\e[38;5;255m \e[38;5;186m'redis-cli -s /tmp/redis.sock'\e[38;5;255m; \e[K\r\n\e[38;5;0m\e[m\e(B\e[1 q\e[?2004l\e]0;sudo /home/vganzin/github/await\a\e[38;5;0m\e[m\e(B\r\e[38;5;0m\e[m\e(B"
+  - delay: 64
+    content: "\e[0B\r\e[K\e[0;37m⣾\e[0m socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock\e[0A\r"
+  - delay: 40
+    content: "\e[0B\r\e[K\e[0;32m⣷\e[0m socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock\e[0A\r"
+  - delay: 19
+    content: 'redis /tmp/redis.sock> '
+  - delay: 1466
+    content: "\r\n"
+  - delay: 11
+    content: "\e[1 q\e[38;5;237m⏎\e[m\e(B                                                                \r⏎ \r\e[K"
+  - delay: 7
+    content: "\e[?2004h"
+  - delay: 6
+    content: "\e]0;fish /home/vganzin/github/await\a\e[38;5;0m\e[m\e(B\e[38;5;81m~/g/await\e[m\e(B \e[38;5;255m\e[K"
+  - delay: 720
+    content: "\r\n\e[38;5;0m\e[m\e(B\e[38;5;0m\e[m\e(B\e[?2004l"
