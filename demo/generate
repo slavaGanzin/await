@@ -1,8 +1,16 @@
 #!/usr/bin/env fish
 
-echo """await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com'""" | xclip
+# echo """await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com'""" | xclip
+# terminalizer record demo/1 --skip-sharing --command fish --config demo/template
+# terminalizer render demo/1 -o demo/1.gif
+# chromium demo/1.gif
 
-terminalizer record demo/1 --skip-sharing --command fish --config demo/template
-xdotool key --clearmodifiers ctrl+l
-terminalizer render demo/1 -o demo/1.gif
-chromium demo/1.gif
+# echo 'await "curl \'https://whatnot.ai\' &>/dev/null && echo UP || echo DOWN" --forever --fail --exec "ntfy send \'whatnot.ai \1\'"' | xclip
+# terminalizer record demo/2 --skip-sharing --command fish --config demo/template
+# terminalizer render demo/2 -o demo/2.gif
+# chromium demo/2.gif
+
+echo 'await "stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl" "pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null" --forever --stdout --silent' | xclip
+terminalizer record demo/3 --skip-sharing --command fish --config demo/template
+terminalizer render demo/3 -o demo/3.gif
+chromium demo/3.gif

@@ -12,9 +12,27 @@ chmod +x /usr/local/bin/await
 ## You can
 ### Healthcheck FAANG
 
-<img src='demo/1.gif' width='100%'/>
+<img src='demo/1.gif' width='100%'></img>
+
 \`\`\`bash
 await 'whois facebook.com' 'nslookup apple.com' 'dig +short amazon.com' 'sleep 1 | telnet netflix.com 443 2>/dev/null' 'http google.com' --fail
+\`\`\`
+
+### Healthcheck your site
+
+<img src='demo/2.gif' width='100%'></img>
+
+\`\`\`bash
+await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" --forever --fail --exec "ntfy send 'whatnot.ai \1'"
+\`\`\`
+
+
+### Use as [concurrently](https://github.com/kimmobrunfeldt/concurrently)
+
+<img src='demo/3.gif' width='100%'></img>
+
+\`\`\`bash
+await "stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl" "pug /home/vganzin/work/whatnot/front/index.pug --out /home/vganzin/work/whatnot/front --watch --pretty 2>/dev/null" --forever --stdout --silent
 \`\`\`
 
 

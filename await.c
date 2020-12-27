@@ -127,7 +127,7 @@ typedef struct {
   int forever;
   int daemonize;
   int fail;
-  int verbose;
+  int stdout;
   char *onSuccess;
   int nCommands;
 } ARGS;
@@ -176,7 +176,7 @@ int shell(void * arg) {
       }
 
       sprintf(c->out, "%s%s", c->out, buf);
-      if (!args.silent && args.verbose) printf("\n\n%s", buf);
+      if (args.stdout) printf("\n\n%s", buf);
     }
 
     if (!c->spinner || c->spinner == 0) c->spinner = 7;
@@ -199,7 +199,7 @@ void help() {
   "# runs list of commands and waits for their termination\n"
   "\nOPTIONS:\n"
   "  --help\t#print this help\n"
-  "  --verbose -v\t#increase verbosity\n"
+  "  --stdout -o\t#print stdout of commands\n"
   "  --silent -V\t#print nothing\n"
   "  --fail -f\t#waiting commands to fail\n"
   "  --status -s\t#expected status [default: 0]\n"
@@ -224,11 +224,16 @@ void help() {
   "# lazy version\n"
   "  await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock\n\n"
   "# daily checking if I am on french reviera. Just in case\n"
-  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
-  "# Yet another server monitor\n"
-  "  await 'http https://whatnot.ai' --forever --fail --exec \"ntfy send \\'whatnot.ai down\\'\"'\n\n"
-  "# waiting for new iPhone in daemon mode\n"
-  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --interval 86400 --daemon --exec \"ntfy send \1\" \n\n"
+  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400"
+  "\n\n"
+  "# Yet another server monitor"
+  "\n"
+  "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --fail\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\""
+  "\n\n"
+  "# waiting for new iPhone in daemon mode"
+  "\n"
+  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n    --interval 86400 --daemon --exec \"ntfy send \1\""
+  "\n\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
@@ -243,7 +248,7 @@ void parse_args(int argc, char *argv[]) {
       {
         static struct option long_options[] =
           {
-            {"verbose", no_argument,       0, 'v'},
+            {"stdout", no_argument,       0, 'o'},
             {"silent",  no_argument,       0, 'V'},
             {"any",    no_argument,        0, 'a'},
             {"fail",    no_argument,       0, 'f'},
@@ -257,7 +262,7 @@ void parse_args(int argc, char *argv[]) {
           };
         int option_index = 0;
 
-        getopt = getopt_long(argc, argv, "e:vVs:ai:dFfc", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "e:oVs:ai:dFfc", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -275,7 +280,7 @@ void parse_args(int argc, char *argv[]) {
             break;
 
           case 'V': args.silent = 1; break;
-          case 'v': args.verbose = 1; break;
+          case 'o': args.stdout = 1; break;
           case 'e': args.onSuccess=optarg; break;
           case 's': args.expectedStatus=atoi(optarg); break;
           case 'f': args.fail = 1; break;
