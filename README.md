@@ -23,7 +23,7 @@ await 'whois facebook.com' \
 ### Notify yourself when your site down
 ```bash
 await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" \
-      --forever --fail --exec "ntfy send 'whatnot.ai \1'"
+      --forever --change --exec "ntfy send 'whatnot.ai \1'"
 ```
 
 <img src='demo/2.gif' width='100%'></img>
@@ -94,7 +94,7 @@ EXAMPLES:
   await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400
 
 # Yet another server monitor
-  await "curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'" --forever --fail\
+  await "curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'" --forever --change\
     --exec "ntfy send \'whatnot.ai \1\'"
 
 # waiting for new iPhone in daemon mode

@@ -25,7 +25,7 @@ await 'whois facebook.com' \\
 ### Notify yourself when your site down
 \`\`\`bash
 await \"curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN\" \\
-      --forever --fail --exec \"ntfy send 'whatnot.ai \1'\"
+      --forever --change --exec \"ntfy send 'whatnot.ai \1'\"
 \`\`\`
 
 <img src='demo/2.gif' width='100%'></img>

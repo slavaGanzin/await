@@ -131,7 +131,7 @@ typedef struct {
   char *onSuccess;
   int nCommands;
 } ARGS;
-ARGS args = {.interval=200, .expectedStatus = 0, .silent=0};
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0};
 
 // void clean() {
 //   for(int i = 0; i < totalCommands; i = i + 1 ){
@@ -173,19 +173,20 @@ int shell(void * arg) {
         c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
         c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
       }
-
       sprintf(c->out, "%s%s", c->out, buf);
-      if (args.stdout) printf("\n\n%s", buf);
+      if (args.stdout) printf("%s", buf);
     }
 
-    if (!c->spinner || c->spinner == 0) c->spinner = 7;
+    if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
     c->spinner--;
     c->status = WEXITSTATUS(pclose(fp));
 
-    if (!strcmp(c->previousOut, "first run")) c->change = strcmp(c->out, c->previousOut);
+    if (strcmp(c->previousOut, "first run") != 0)
+      c->change = strcmp(c->previousOut,c->out) != 0;
+
     strcpy(c->previousOut, c->out);
 
-    syslog (LOG_NOTICE, "%d %s", c->status, c->command);
+    syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
   }
   return 0;
@@ -222,7 +223,7 @@ void help() {
   "# daily checking if I am on french reviera. Just in case\n"
   "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
   "# Yet another server monitor\n"
-  "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --fail\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\"\n\n"
+  "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --change\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\"\n\n"
   "# waiting for new iPhone in daemon mode\n"
   "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --change --interval 86400 --daemon --exec \"ntfy send \\1\"\n\n"
 
@@ -235,21 +236,20 @@ void help() {
 void parse_args(int argc, char *argv[]) {
     int getopt;
 
-    while (1)
-      {
+    while (1) {
         static struct option long_options[] =
           {
-            {"stdout", no_argument,       0, 'o'},
+            {"stdout",  no_argument,       0, 'o'},
             {"silent",  no_argument,       0, 'V'},
-            {"any",    no_argument,        0, 'a'},
+            {"any",     no_argument,       0, 'a'},
             {"fail",    no_argument,       0, 'f'},
             {"forever", no_argument,       0, 'F'},
-            {"change", no_argument,       0, 'c'},
+            {"change",  no_argument,       0, 'c'},
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
-            {"help",       no_argument,   0, 'h'},
-            {"daemon", no_argument,       0, 'd'},
+            {"help",    no_argument,       0, 'h'},
+            {"daemon",  no_argument,       0, 'd'},
           };
         int option_index = 0;
 
@@ -265,8 +265,7 @@ void parse_args(int argc, char *argv[]) {
             if (long_options[option_index].flag != 0)
               break;
             printf ("option %s", long_options[option_index].name);
-            if (optarg)
-              printf (" with arg %s", optarg);
+            if (optarg) printf (" with arg %s", optarg);
             printf ("\n");
             break;
 
@@ -319,9 +318,15 @@ int main(int argc, char *argv[]){
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
       }
-      not_done += (args.change && !c[i].change) || c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+
+      if (args.change) not_done =  !c[i].change;
+      else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+
+      printf("%d %d %d", not_done);
     }
+    fflush(stdout);
     fflush(stderr);
+    printf("%d", not_done);
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
       fflush(stdout);
