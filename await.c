@@ -145,7 +145,7 @@ int const CHUNK_SIZE = BUF_SIZE * 100;
 
 char * replace_outs(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
-    if (!c[i].previousOut || !strcmp(c->previousOut, "first run")) break;
+    if (!c[i].previousOut || strcmp(c[i].previousOut, "first run")) continue;
     char C[3];
     sprintf(C, "\\%d", i+1);
     string = replace(C, c[i].previousOut, string);
