@@ -325,7 +325,7 @@ int main(int argc, char *argv[]) {
       if (args.onSuccess) system(replace_outs(args.onSuccess));
       if (!args.forever) exit(0);
     }
-    msleep(40);
+    msleep(args.interval);
   }
   closelog();
 }
