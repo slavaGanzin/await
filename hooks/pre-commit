@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ./build
 echo """# await
-*$(du -h await | sed 's/\s.*//') small footprint single binary runs list of commands in parallel and waits for their termination*
+$(du -h await | sed 's/\s.*//'), small memory footprint, single binary that run list of commands in parallel and waits for their termination
 
 # Installation
 \`\`\`bash
