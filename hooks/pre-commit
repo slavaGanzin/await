@@ -30,6 +30,15 @@ await \"curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN\" \\
 
 <img src='demo/2.gif' width='100%'></img>
 
+### Action on speciefic file type changes
+\`\`\`bash
+await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
+# you can filter with:
+\`stat --format '%n %z' **; | grep -v node_modules\`
+\`\`\`
+
+<img src='demo/7.gif' width='100%'></img>
+
 ### Use as [concurrently](https://github.com/kimmobrunfeldt/concurrently)
 \`\`\`bash
 await \"stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl\" \\
