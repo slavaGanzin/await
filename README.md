@@ -8,7 +8,17 @@ chmod +x /usr/local/bin/await
 ```
 
 # With await you can:
-### Healthcheck FAANG
+### Action on specific file type changes
+```bash
+await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
+# you can filter with:
+`stat --format '%n %z' **; | grep -v node_modules`
+```
+
+<img src='demo/7.gif' width='100%'></img>
+
+
+### Wait for FAANG to fail
 ```bash
 await 'whois facebook.com' \
       'nslookup apple.com' \
@@ -28,14 +38,6 @@ await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" \
 
 <img src='demo/2.gif' width='100%'></img>
 
-### Action on specific file type changes
-```bash
-await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
-# you can filter with:
-`stat --format '%n %z' **; | grep -v node_modules`
-```
-
-<img src='demo/7.gif' width='100%'></img>
 
 ### Use as [concurrently](https://github.com/kimmobrunfeldt/concurrently)
 ```bash
@@ -94,6 +96,9 @@ NOTES:
 
 
 EXAMPLES:
+# action on specific file type changes
+ await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
+
 # waiting google (or your internet connection) to fail
   await 'curl google.com' --fail
 
@@ -116,9 +121,6 @@ EXAMPLES:
 # waiting for new iPhone in daemon mode
   await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
  --change --interval 86400 --daemon --exec "ntfy send \1"
-
-# action on specific file type changes
- await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
 
 ```
 

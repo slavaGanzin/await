@@ -212,6 +212,8 @@ void help() {
   "# you can use stdout substitution in --exec and in commands itself:\n"
   "  await 'echo -n 10' 'echo -n $RANDOM' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
   "\n\nEXAMPLES:\n"
+  "# action on specific file type changes\n"
+  " await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'\n\n"
   "# waiting google (or your internet connection) to fail\n"
   "  await 'curl google.com' --fail\n\n"
   "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
@@ -226,8 +228,6 @@ void help() {
   "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --change\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\"\n\n"
   "# waiting for new iPhone in daemon mode\n"
   "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --change --interval 86400 --daemon --exec \"ntfy send \\1\"\n\n"
-  "# action on specific file type changes\n"
-  " await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'\n\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
