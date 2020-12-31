@@ -28,7 +28,7 @@ await "curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN" \
 
 <img src='demo/2.gif' width='100%'></img>
 
-### Action on speciefic file type changes
+### Action on specific file type changes
 ```bash
 await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
 # you can filter with:
@@ -116,6 +116,9 @@ EXAMPLES:
 # waiting for new iPhone in daemon mode
   await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
  --change --interval 86400 --daemon --exec "ntfy send \1"
+
+# action on specific file type changes
+ await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
 
 ```
 
