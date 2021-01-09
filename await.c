@@ -145,7 +145,7 @@ int const CHUNK_SIZE = BUF_SIZE * 100;
 
 char * replace_outs(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
-    if (strcmp(c[i].previousOut, "first run") == 0) continue;
+    if (!c[i].previousOut) continue;
     char C[3];
     sprintf(C, "\\%d", i+1);
     string = replace(C, c[i].previousOut, string);
@@ -158,7 +158,6 @@ int shell(void * arg) {
   c->out = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
   c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
-  strcpy(c->previousOut, "first run");
 
   char buf[BUF_SIZE];
   while (1) {
