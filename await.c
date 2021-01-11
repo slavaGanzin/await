@@ -133,13 +133,6 @@ typedef struct {
 } ARGS;
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0};
 
-// void clean() {
-//   for(int i = 0; i < totalCommands; i = i + 1 ){
-//     fprintf(stderr, "\033[%dB\r\033[K\r\033[%dA", i, i);
-//   }
-//   fflush(stderr);
-// }
-
 int const BUF_SIZE = 1024;
 int const CHUNK_SIZE = BUF_SIZE * 100;
 
@@ -173,7 +166,6 @@ int shell(void * arg) {
         c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
       }
       sprintf(c->out, "%s%s", c->out, buf);
-      if (args.stdout) printf("%s", buf);
     }
 
     if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
@@ -185,7 +177,7 @@ int shell(void * arg) {
 
     strcpy(c->previousOut, c->out);
 
-    syslog(LOG_NOTICE, "%d %s", c->status, c->command);
+    if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
   }
   return 0;
@@ -205,6 +197,7 @@ void help() {
   "  --exec -e\t#run some shell command on success;\n"
   "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
   "  --forever -F\t#do not exit ever\n"
+  "  --service -S\t#create systemd user service with same parameters and activate it\n"
 
   "\n\nNOTES:\n"
   "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
@@ -250,6 +243,7 @@ void parse_args(int argc, char *argv[]) {
             {"interval",required_argument, 0, 'i'},
             {"help",    no_argument,       0, 'h'},
             {"daemon",  no_argument,       0, 'd'},
+            // {"service", optional_argument, 0, 'S'},
           };
         int option_index = 0;
 
@@ -314,6 +308,7 @@ int main(int argc, char *argv[]) {
       if (!args.silent) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
+        if (args.stdout) printf("%s", c[i].out);
       }
 
       if (args.change) not_done =  !c[i].change;
@@ -328,5 +323,5 @@ int main(int argc, char *argv[]) {
     }
     msleep(args.interval);
   }
-  closelog();
+  if (args.daemonize) closelog();
 }

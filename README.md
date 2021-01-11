@@ -87,6 +87,7 @@ OPTIONS:
   --exec -e	#run some shell command on success;
   --interval -i	#milliseconds between one round of commands [default: 200]
   --forever -F	#do not exit ever
+  --service -S	#create systemd user service with same parameters and activate it
 
 
 NOTES:
