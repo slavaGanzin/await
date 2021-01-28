@@ -79,7 +79,7 @@ await [arguments] commands
 OPTIONS:
   --help	#print this help
   --stdout -o	#print stdout of commands
-  --silent -V	#print nothing
+  --silent -V	#do not print spinners and commands
   --fail -f	#waiting commands to fail
   --status -s	#expected status [default: 0]
   --any -a	#terminate if any of command return expected status

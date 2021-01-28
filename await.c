@@ -189,7 +189,7 @@ void help() {
   "\nOPTIONS:\n"
   "  --help\t#print this help\n"
   "  --stdout -o\t#print stdout of commands\n"
-  "  --silent -V\t#print nothing\n"
+  "  --silent -V\t#do not print spinners and commands\n"
   "  --fail -f\t#waiting commands to fail\n"
   "  --status -s\t#expected status [default: 0]\n"
   "  --any -a\t#terminate if any of command return expected status\n"
@@ -308,8 +308,8 @@ int main(int argc, char *argv[]) {
       if (!args.silent) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
-        if (args.stdout) printf("%s", c[i].out);
       }
+      if (args.stdout) printf("%s", c[i].out);
 
       if (args.change) not_done =  !c[i].change;
       else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
