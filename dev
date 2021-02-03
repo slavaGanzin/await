@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 
-await 'stat *.c' --change --silent --forever --exec "sudo kill `ps -eopid,cmd | grep 'await $@' | grep -v 'await stat' | cut -d ' ' -f 2`; ./build; eval "./await $@" &"
+await 'stat *.c' --change --silent --forever --exec "./build; eval './await $@'"
+
+  # sudo kill `ps -eopid,cmd | grep 'await $@' | grep -v 'await stat' | cut -d ' ' -f 2`;

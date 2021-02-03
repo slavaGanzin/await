@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <syslog.h>
 #include <threads.h>
+#include <pwd.h>
+#include <limits.h>
 
 char* replace(const char* oldW, const char* newW, const char* s) {
     char* result;
@@ -129,9 +131,12 @@ typedef struct {
   int fail;
   int stdout;
   char *onSuccess;
+  char* service;
+  char* args;
   int nCommands;
 } ARGS;
-ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0};
+
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args=""};
 
 int const BUF_SIZE = 1024;
 int const CHUNK_SIZE = BUF_SIZE * 100;
@@ -230,30 +235,43 @@ void help() {
 void parse_args(int argc, char *argv[]) {
     int getopt;
 
+    args.args = malloc(1000);
+
+    int option_index = -1;
     while (1) {
         static struct option long_options[] = {
+            {"service", required_argument, 0, 'S'},
+            {"status",  required_argument, 0, 's'},
+            {"exec",    required_argument, 0, 'e'},
+            {"interval",required_argument, 0, 'i'},
             {"stdout",  no_argument,       0, 'o'},
             {"silent",  no_argument,       0, 'V'},
             {"any",     no_argument,       0, 'a'},
             {"fail",    no_argument,       0, 'f'},
             {"forever", no_argument,       0, 'F'},
             {"change",  no_argument,       0, 'c'},
-            {"status",  required_argument, 0, 's'},
-            {"exec",    required_argument, 0, 'e'},
-            {"interval",required_argument, 0, 'i'},
             {"help",    no_argument,       0, 'h'},
             {"daemon",  no_argument,       0, 'd'},
-            // {"service", optional_argument, 0, 'S'},
           };
-        int option_index = 0;
+        option_index++;
 
-        getopt = getopt_long(argc, argv, "e:oVs:ai:dFfc", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "S:s:e:i:oVafFc", long_options, &option_index);
 
         if (getopt == -1)
           break;
 
-        switch (getopt)
-          {
+        if (long_options[option_index].name != "service") {
+          strcat(args.args, "--");
+          strcat(args.args, long_options[option_index].name);
+          if (optarg) {
+            strcat(args.args, " \"");
+            strcat(args.args, optarg);
+            strcat(args.args, "\"");
+          }
+          strcat(args.args, " ");
+        }
+
+        switch (getopt) {
           case 0:
             /* If this option set a flag, do nothing else now. */
             if (long_options[option_index].flag != 0)
@@ -271,27 +289,66 @@ void parse_args(int argc, char *argv[]) {
           case 'a': args.any = 1; break;
           case 'F': args.forever = 1; break;
           case 'c': args.change = 1; break;
+          case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
           case 'h': case '?': help(); break;
           default: abort();
-          }
+        }
       }
 
     if (!args.onSuccess && args.daemonize)
       printf("NOTICE: --daemon is kinda meaningless without --exec 'command'");
 
-    while (optind < argc)
+    while (optind < argc) {
+      strcat(args.args, " \"");
+      strcat(args.args, argv[optind]);
+      strcat(args.args, "\"");
       c[args.nCommands++].command = argv[optind++];
+    }
 
     if (args.nCommands == 0) help();
 }
 
 
+int service() {
+  FILE * fp;
+  const char *home;
+  if ((home = getenv("HOME")) == NULL)
+      home = getpwuid(getuid())->pw_dir;
+
+  char* service = replace("NAME", args.service, "NAME.service");
+  char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
+  char cwd[PATH_MAX];
+  getcwd(cwd, sizeof(cwd));
+  char binary[BUFSIZ];
+  readlink("/proc/self/exe", binary, BUFSIZ);
+
+  fp = fopen(f, "w");
+  fprintf(fp, "[Unit]\n"\
+   "Description=await %s\n"\
+   "After=network-online.target\n"\
+   "Wants=network-online.target\n"\
+   "[Service]\n"\
+   "ExecStart=%s\n"\
+  "WorkingDirectory=%s\n"\
+   "Restart=always\n"\
+   "[Install]\n"\
+   "WantedBy=default.target\n"
+   , args.args, replace("ARGS", args.args, replace("BINARY", binary, "BINARY ARGS")), cwd);
+  fclose(fp);
+
+  system("systemctl --user daemon-reload");
+  system(replace("SERVICE", service, "systemctl cat --user SERVICE"));
+  system(replace("SERVICE", service, "systemctl enable --user --now SERVICE"));
+  system(replace("SERVICE", service, "journalctl --user --follow --unit SERVICE"));
+}
+
 int main(int argc, char *argv[]) {
   thrd_t thread;
 
   parse_args(argc, argv);
+  if (args.service) return service();
   if (args.daemonize) daemonize();
 
   FILE *fp;
