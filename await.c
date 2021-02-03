@@ -237,13 +237,8 @@ void parse_args(int argc, char *argv[]) {
 
     args.args = malloc(1000);
 
-    int option_index = -1;
     while (1) {
         static struct option long_options[] = {
-            {"service", required_argument, 0, 'S'},
-            {"status",  required_argument, 0, 's'},
-            {"exec",    required_argument, 0, 'e'},
-            {"interval",required_argument, 0, 'i'},
             {"stdout",  no_argument,       0, 'o'},
             {"silent",  no_argument,       0, 'V'},
             {"any",     no_argument,       0, 'a'},
@@ -252,17 +247,25 @@ void parse_args(int argc, char *argv[]) {
             {"change",  no_argument,       0, 'c'},
             {"help",    no_argument,       0, 'h'},
             {"daemon",  no_argument,       0, 'd'},
+            {"service", required_argument, 0, 'S'},
+            {"status",  required_argument, 0, 's'},
+            {"exec",    required_argument, 0, 'e'},
+            {"interval",required_argument, 0, 'i'},
+            {0, 0, 0, 0}
           };
-        option_index++;
 
-        getopt = getopt_long(argc, argv, "S:s:e:i:oVafFc", long_options, &option_index);
+        int option_index = 0;
+        getopt = getopt_long(argc, argv, "oVafFchdS:s:e:i:", long_options, &option_index);
 
         if (getopt == -1)
           break;
 
-        if (long_options[option_index].name != "service") {
+        if (getopt != 'S') {
           strcat(args.args, "--");
-          strcat(args.args, long_options[option_index].name);
+          for (int i =0; i<12; i++) {
+            if (long_options[i].val == getopt)
+              strcat(args.args, long_options[i].name);
+          }
           if (optarg) {
             strcat(args.args, " \"");
             strcat(args.args, optarg);
@@ -325,23 +328,22 @@ int service() {
   readlink("/proc/self/exe", binary, BUFSIZ);
 
   fp = fopen(f, "w");
-  fprintf(fp, "[Unit]\n"\
-   "Description=await %s\n"\
-   "After=network-online.target\n"\
-   "Wants=network-online.target\n"\
-   "[Service]\n"\
-   "ExecStart=%s\n"\
-  "WorkingDirectory=%s\n"\
-   "Restart=always\n"\
-   "[Install]\n"\
-   "WantedBy=default.target\n"
-   , args.args, replace("ARGS", args.args, replace("BINARY", binary, "BINARY ARGS")), cwd);
+  fprintf(fp,
+    "[Unit]\n"\
+    "Description=await %s\n"\
+    "After=network-online.target\n"\
+    "Wants=network-online.target\n"\
+    "StartLimitIntervalSec=0\n"\
+    "[Service]\n"\
+    "WorkingDirectory=%s\n"\
+    "ExecStart=%s\n"\
+    "Restart=always\n"\
+    "[Install]\n"\
+    "WantedBy=default.target\n"
+   , args.args, cwd, replace("ARGS", args.args, replace("BINARY", binary, "BINARY ARGS")));
   fclose(fp);
 
-  system("systemctl --user daemon-reload");
-  system(replace("SERVICE", service, "systemctl cat --user SERVICE"));
-  system(replace("SERVICE", service, "systemctl enable --user --now SERVICE"));
-  system(replace("SERVICE", service, "journalctl --user --follow --unit SERVICE"));
+  system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
 }
 
 int main(int argc, char *argv[]) {

@@ -1,5 +1,5 @@
 # await
-28K, small memory footprint, single binary that run list of commands in parallel and waits for their termination
+32K, small memory footprint, single binary that run list of commands in parallel and waits for their termination
 
 # Installation
 ```bash
