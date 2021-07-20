@@ -2,13 +2,15 @@
 32K, small memory footprint, single binary that run list of commands in parallel and waits for their termination
 
 # Installation
+### linux
 ```bash
-# linux
 curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await -o /usr/local/bin/await
 
-#macos
+chmod +x /usr/local/bin/await
+```
+### MacOS
+```
 curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await-macos -o /usr/local/bin/await
-
 chmod +x /usr/local/bin/await
 ```
 
