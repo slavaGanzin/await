@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-gcc-10 await.c -o await -l pthread
+gcc await.c -o await -l pthread

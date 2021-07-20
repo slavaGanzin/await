@@ -6,7 +6,12 @@
 #include <getopt.h>
 #include <sys/stat.h>
 #include <syslog.h>
-#include <threads.h>
+#ifdef __APPLE__
+  #include "threads.h"
+#else
+  #include <threads.h>
+#endif
+
 #include <pwd.h>
 #include <limits.h>
 
@@ -175,7 +180,8 @@ int shell(void * arg) {
 
     if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
     c->spinner--;
-    c->status = WEXITSTATUS(pclose(fp));
+int status = pclose(fp);
+    c->status = WEXITSTATUS(status);
 
     if (strcmp(c->previousOut, "first run") != 0)
       c->change = strcmp(c->previousOut,c->out) != 0;
