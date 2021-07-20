@@ -3,7 +3,12 @@
 
 # Installation
 ```bash
+# linux
 curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await -o /usr/local/bin/await
+
+#macos
+curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await-macos -o /usr/local/bin/await
+
 chmod +x /usr/local/bin/await
 ```
 
