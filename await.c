@@ -374,7 +374,7 @@ int main(int argc, char *argv[]) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
       }
-      if (args.stdout) printf("%s", c[i].out);
+      if (args.stdout && c[i].out) printf("%s", c[i].out);
 
       if (args.change) not_done =  !c[i].change;
       else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
