@@ -22,6 +22,6 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: ./await
         asset_name: await
-        tag: 0.9
+        tag: 0.91
         overwrite: true
         body: ""
