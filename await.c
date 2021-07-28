@@ -15,6 +15,42 @@
 #include <pwd.h>
 #include <limits.h>
 
+
+thrd_t thread;
+char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
+typedef struct {
+  int spinner;
+  char *command;
+  char *out;
+  char *previousOut;
+  size_t outPos;
+  int status;
+  int change;
+} COMMAND;
+
+COMMAND c[100];
+
+typedef struct {
+  int expectedStatus;
+  int interval;
+  int any;
+  int change;
+  int silent;
+  int forever;
+  int daemonize;
+  int fail;
+  int stdout;
+  char *onSuccess;
+  char* service;
+  char* args;
+  int nCommands;
+} ARGS;
+
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args=""};
+
+int const BUF_SIZE = 1024;
+int const CHUNK_SIZE = BUF_SIZE * 100;
+
 char* replace(const char* oldW, const char* newW, const char* s) {
     char* result;
     int i, cnt = 0;
@@ -51,8 +87,7 @@ char* replace(const char* oldW, const char* newW, const char* s) {
     return result;
 }
 
-static void daemonize()
-{
+static void daemonize() {
     pid_t pid;
     pid = fork();
     if (pid < 0) exit(EXIT_FAILURE);
@@ -111,41 +146,6 @@ int msleep(long msec)
     return res;
 }
 
-thrd_t thread;
-char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
-typedef struct {
-  int spinner;
-  char *command;
-  char *out;
-  char *previousOut;
-  size_t outPos;
-  int status;
-  int change;
-} COMMAND;
-
-COMMAND c[100];
-
-typedef struct {
-  int expectedStatus;
-  int interval;
-  int any;
-  int change;
-  int silent;
-  int forever;
-  int daemonize;
-  int fail;
-  int stdout;
-  char *onSuccess;
-  char* service;
-  char* args;
-  int nCommands;
-} ARGS;
-
-ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args=""};
-
-int const BUF_SIZE = 1024;
-int const CHUNK_SIZE = BUF_SIZE * 100;
-
 char * replace_outs(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
     if (!c[i].previousOut) continue;
@@ -156,43 +156,6 @@ char * replace_outs(char *string) {
   return string;
 }
 
-int shell(void * arg) {
-  COMMAND *c = (COMMAND*)arg;
-  c->out = malloc(CHUNK_SIZE * sizeof(char));
-  strcpy(c->out, "");
-  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
-
-  char buf[BUF_SIZE];
-  while (1) {
-    c->outPos = 0;
-    strcpy(c->out, "");
-    FILE *fp = popen(replace_outs(c->command), "r");
-
-    while (fgets(buf, BUF_SIZE, fp) !=NULL) {
-      c->outPos += BUF_SIZE;
-
-      if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
-        c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
-        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
-      }
-      sprintf(c->out, "%s%s", c->out, buf);
-    }
-
-    if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
-    c->spinner--;
-    int status = pclose(fp);
-    c->status = WEXITSTATUS(status);
-
-    if (strcmp(c->previousOut, "first run") != 0)
-      c->change = strcmp(c->previousOut,c->out) != 0;
-
-    strcpy(c->previousOut, c->out);
-
-    if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
-    msleep(args.interval);
-  }
-  return 0;
-}
 
 void help() {
   printf("await [arguments] commands\n\n"
@@ -351,6 +314,45 @@ int service() {
 
   system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
 }
+
+int shell(void * arg) {
+  COMMAND *c = (COMMAND*)arg;
+  c->out = malloc(CHUNK_SIZE * sizeof(char));
+  strcpy(c->out, "");
+  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+
+  char buf[BUF_SIZE];
+  while (1) {
+    c->outPos = 0;
+    strcpy(c->out, "");
+    FILE *fp = popen(replace_outs(c->command), "r");
+
+    while (fgets(buf, BUF_SIZE, fp) !=NULL) {
+      c->outPos += BUF_SIZE;
+
+      if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
+        c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+      }
+      sprintf(c->out, "%s%s", c->out, buf);
+    }
+
+    if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
+    c->spinner--;
+    int status = pclose(fp);
+    c->status = WEXITSTATUS(status);
+
+    if (strcmp(c->previousOut, "first run") != 0)
+      c->change = strcmp(c->previousOut,c->out) != 0;
+
+    strcpy(c->previousOut, c->out);
+
+    if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
+    msleep(args.interval);
+  }
+  return 0;
+}
+
 
 int main(int argc, char *argv[]) {
   thrd_t thread;
