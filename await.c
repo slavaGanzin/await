@@ -355,6 +355,7 @@ int shell(void * arg) {
 
 
 int main(int argc, char *argv[]) {
+  pid_t sessionid = setsid();
   thrd_t thread;
 
   parse_args(argc, argv);

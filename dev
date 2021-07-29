@@ -1,7 +1,4 @@
 #!/usr/bin/env fish
 
 set args '"'(string join '" "' $argv)'"'
-
 await 'stat *.c' --change --silent --forever --exec "./build; ./await $args"
-
-  # sudo kill `ps -eopid,cmd | grep 'await $@' | grep -v 'await stat' | cut -d ' ' -f 2`;
