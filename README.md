@@ -12,11 +12,6 @@ curl -L https://github.com/slavaGanzin/await/releases/download/0.91/await -o /us
 chmod +x /usr/local/bin/await
 ```
 
-### Arch Linux
-```
-yay -S await
-```
-
 ### macOS install
 ```
 curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await-macos -o /usr/local/bin/await

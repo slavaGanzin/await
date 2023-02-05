@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+version=`git tag --list | sort -n | tail -n 1`
+./build
+rm -rf releases
+mkdir releases
+tar czf ./releases/await_${version}_linux_amd64.tgz await
+gh release delete v${version} --yes
+gh release create v${version} ./releases/*.tgz --title "await $version" --generate-notes --latest
+
