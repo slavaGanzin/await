@@ -8,8 +8,7 @@
 
 ### linux install
 ```bash
-curl -L https://github.com/slavaGanzin/await/releases/download/0.91/await -o /usr/local/bin/await
-chmod +x /usr/local/bin/await
+curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
 ### macOS install
