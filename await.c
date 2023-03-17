@@ -29,6 +29,7 @@ typedef struct {
 } COMMAND;
 
 COMMAND c[100];
+COMMAND exec;
 
 typedef struct {
   int expectedStatus;
@@ -40,7 +41,7 @@ typedef struct {
   int daemonize;
   int fail;
   int stdout;
-  char *onSuccess;
+  char *exec;
   char* service;
   char* args;
   int nCommands;
@@ -255,7 +256,7 @@ void parse_args(int argc, char *argv[]) {
 
           case 'V': args.silent = 1; break;
           case 'o': args.stdout = 1; break;
-          case 'e': args.onSuccess=optarg; break;
+          case 'e': args.exec=optarg; break;
           case 's': args.expectedStatus=atoi(optarg); break;
           case 'f': args.fail = 1; break;
           case 'a': args.any = 1; break;
@@ -269,7 +270,7 @@ void parse_args(int argc, char *argv[]) {
         }
       }
 
-    if (!args.onSuccess && args.daemonize)
+    if (!args.exec && args.daemonize)
       printf("NOTICE: --daemon is kinda meaningless without --exec 'command'");
 
     while (optind < argc) {
@@ -389,7 +390,9 @@ int main(int argc, char *argv[]) {
     fflush(stderr);
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
-      if (args.onSuccess) system(replace_outs(args.onSuccess));
+      if (args.exec) {
+        system(replace_outs(args.exec));
+      }
       if (!args.forever) exit(0);
     }
     msleep(args.interval);
