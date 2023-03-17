@@ -358,6 +358,7 @@ int shell(void * arg) {
 int main(int argc, char *argv[]) {
   pid_t sessionid = setsid();
   thrd_t thread;
+  thrd_t exec_thread;
 
   parse_args(argc, argv);
   if (args.service) return service();
@@ -386,14 +387,36 @@ int main(int argc, char *argv[]) {
       if (args.change) not_done =  !c[i].change;
       else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
     }
+    if (exec.out) {
+        printf("%s", exec.out);
+        strcpy(exec.out, "");
+    }
+
     fflush(stdout);
     fflush(stderr);
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
       if (args.exec) {
-        system(replace_outs(args.exec));
+        exec.command = args.exec;
+        exec.spinner = 1;
+        thrd_create(&exec_thread, shell, &exec);
       }
-      if (!args.forever) exit(0);
+      if (!args.forever) {
+        while (1) {
+          int color = exec.status == -1 ? 7 : exec.status == args.expectedStatus ? 2 : 1;
+          fprintf(stderr, "\r");
+          msleep(args.interval);
+          if (exec.out) {
+              printf("%s", exec.out);
+              strcpy(exec.out, "");
+              fflush(stdout);
+              fflush(stderr);
+          }
+          if (exec.spinner == 0) {
+            exit(0);
+          }
+        }
+      }
     }
     msleep(args.interval);
   }

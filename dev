@@ -1,4 +1,4 @@
-#!/usr/bin/env fish
+#!/usr/bin/env bash
+set -x
 
-set args '"'(string join '" "' $argv)'"'
-await 'stat *.c' --change --silent --forever --exec "./build; ./await $args"
+await 'stat *.c' --change --silent --forever --exec "./build; sleep 0.5; ./await $@"
