@@ -21,7 +21,7 @@ chmod +x /usr/local/bin/await
 \`\`\`
 
 # With await you can:
-### Action on specific file type changes
+### Take action on specific file type changes
 \`\`\`bash
 await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
 # you can filter with:
