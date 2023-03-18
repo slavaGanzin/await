@@ -6,12 +6,7 @@
 #include <getopt.h>
 #include <sys/stat.h>
 #include <syslog.h>
-#ifdef __APPLE__
-  #include "threads.h"
-#else
-  #include <threads.h>
-#endif
-
+#include <pthread.h>
 #include <pwd.h>
 #include <limits.h>
 
@@ -25,7 +20,7 @@ typedef struct {
   size_t outPos;
   int status;
   int change;
-  thrd_t thread;
+  pthread_t thread;
 } COMMAND;
 
 COMMAND c[100];
@@ -316,7 +311,7 @@ int service() {
   system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
 }
 
-int shell(void * arg) {
+void *shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   c->out = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
@@ -351,13 +346,12 @@ int shell(void * arg) {
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     msleep(args.interval);
   }
-  return 0;
 }
 
 
 int main(int argc, char *argv[]) {
   pid_t sessionid = setsid();
-  thrd_t exec_thread;
+  pthread_t exec_thread;
 
   parse_args(argc, argv);
   if (args.service) return service();
@@ -367,7 +361,7 @@ int main(int argc, char *argv[]) {
 
   for(int i = 0; i < args.nCommands; i++) {
     c[i].status = -1;
-    thrd_create(&c[i].thread, shell, &c[i]);
+    pthread_create(&c[i].thread, NULL, shell, &c[i]);
   }
 
   int not_done;
@@ -398,13 +392,12 @@ int main(int argc, char *argv[]) {
       if (args.exec) {
         exec.command = args.exec;
         exec.spinner = 1;
-        thrd_create(&exec_thread, shell, &exec);
+        pthread_create(&exec_thread, NULL, shell, &exec);
       }
       if (!args.forever) {
         while (1) {
           int color = exec.status == -1 ? 7 : exec.status == args.expectedStatus ? 2 : 1;
           fprintf(stderr, "\r");
-          msleep(args.interval);
           if (exec.out) {
               printf("%s", exec.out);
               strcpy(exec.out, "");
@@ -413,6 +406,7 @@ int main(int argc, char *argv[]) {
           }
           if (exec.spinner == 0) {
             exit(0);
+            return 0;
           }
         }
       }

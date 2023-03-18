@@ -11,12 +11,6 @@
 curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
-### macOS install
-```
-curl -L https://github.com/slavaGanzin/await/releases/download/0.9/await-macos -o /usr/local/bin/await
-chmod +x /usr/local/bin/await
-```
-
 # With await you can:
 ### Take action on specific file type changes
 ```bash
