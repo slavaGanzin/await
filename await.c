@@ -16,7 +16,6 @@
 #include <limits.h>
 
 
-thrd_t thread;
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
 typedef struct {
   int spinner;
@@ -26,6 +25,7 @@ typedef struct {
   size_t outPos;
   int status;
   int change;
+  thrd_t thread;
 } COMMAND;
 
 COMMAND c[100];
@@ -357,7 +357,6 @@ int shell(void * arg) {
 
 int main(int argc, char *argv[]) {
   pid_t sessionid = setsid();
-  thrd_t thread;
   thrd_t exec_thread;
 
   parse_args(argc, argv);
@@ -368,7 +367,7 @@ int main(int argc, char *argv[]) {
 
   for(int i = 0; i < args.nCommands; i++) {
     c[i].status = -1;
-    thrd_create(&thread, shell, &c[i]);
+    thrd_create(&c[i].thread, shell, &c[i]);
   }
 
   int not_done;
