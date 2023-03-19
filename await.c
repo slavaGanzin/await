@@ -20,6 +20,7 @@ typedef struct {
   size_t outPos;
   int status;
   int change;
+  int pid;
   pthread_t thread;
 } COMMAND;
 
@@ -322,6 +323,7 @@ void *shell(void * arg) {
     c->outPos = 0;
     strcpy(c->out, "");
     FILE *fp = popen(replace_outs(c->command), "r");
+    c->pid = fileno(fp);
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
       c->outPos += BUF_SIZE;
@@ -394,20 +396,20 @@ int main(int argc, char *argv[]) {
         exec.spinner = 1;
         pthread_create(&exec_thread, NULL, shell, &exec);
       }
+
       if (!args.forever) {
         while (1) {
           int color = exec.status == -1 ? 7 : exec.status == args.expectedStatus ? 2 : 1;
-          fprintf(stderr, "\r");
-          if (exec.out) {
+          if (exec.out && !args.silent) {
               printf("%s", exec.out);
               strcpy(exec.out, "");
               fflush(stdout);
               fflush(stderr);
           }
           if (exec.spinner == 0) {
-            exit(0);
             return 0;
           }
+          msleep(1);
         }
       }
     }

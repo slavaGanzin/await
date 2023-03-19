@@ -6,4 +6,4 @@ mkdir releases
 tar czf ./releases/await_${version}_linux_amd64.tgz await
 gh release delete v${version} --yes
 gh release create v${version} ./releases/*.tgz --title "await $version" --generate-notes --latest
-
+curl https://i.jpillora.com/slavaGanzin/await! | bash
