@@ -80,7 +80,13 @@ jobs:
     - name: Download Artifact
       uses: actions/download-artifact@v2
       with:
-        name: await-${{ matrix.os }}
+        name: await-macos-latest
+        path: releases
+
+    - name: Download Artifact
+      uses: actions/download-artifact@v2
+      with:
+        name: await-ubuntu-latest
         path: releases
 
     - name: Upload Release Artifact
