@@ -1,0 +1,69 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Set up build tools on Windows
+      if: matrix.os == 'windows-latest'
+      run: |
+        choco install make
+        choco install mingw
+
+    - name: Build on Linux and macOS
+      if: matrix.os != 'windows-latest'
+      run: |
+        gcc await.c -o await -lpthread
+
+    - name: Build on Windows
+      if: matrix.os == 'windows-latest'
+      run: |
+        gcc await.c -o await.exe -lpthread
+
+    - name: Create release directory
+      run: mkdir -p releases
+
+    - name: Move binary to release directory
+      run: |
+        if [ ${{ matrix.os }} == 'windows-latest' ]; then
+          mv await.exe releases/await_${{ github.ref_name }}_windows_amd64.exe
+        elif [ ${{ matrix.os }} == 'macos-latest' ]; then
+          mv await releases/await_${{ github.ref_name }}_macos_amd64
+        else
+          mv await releases/await_${{ github.ref_name }}_linux_amd64
+        fi
+
+    - name: Upload release assets
+      uses: actions/upload-artifact@v2
+      with:
+        name: release-binaries
+        path: releases/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download release assets
+      uses: actions/download-artifact@v2
+      with:
+        name: release-binaries
+        path: releases/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: releases/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
