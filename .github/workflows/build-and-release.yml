@@ -70,7 +70,9 @@ jobs:
 
     - name: Set dummy ACTIONS_RUNTIME_TOKEN for act
       if: ${{ env.ACT }}
-      run: echo "::set-env name=ACTIONS_RUNTIME_TOKEN::dummy_token"
+      run: echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
+
+    - name: Upload release assets
       uses: actions/upload-artifact@v2
       with:
         name: release-binaries
