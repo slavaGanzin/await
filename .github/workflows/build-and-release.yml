@@ -49,6 +49,12 @@ jobs:
           mv await releases/await_${{ github.ref_name }}_linux_amd64
         fi
 
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: await-${{ matrix.os }}
+        path: releases/*
+
     - name: Set dummy ACTIONS_RUNTIME_TOKEN and ACTIONS_RUNTIME_URL for act
       if: ${{ env.ACT }}
       run: |
@@ -71,7 +77,13 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Upload Artifact
+    - name: Download Artifact
+      uses: actions/download-artifact@v2
+      with:
+        name: await-${{ matrix.os }}
+        path: releases
+
+    - name: Upload Release Artifact
       uses: softprops/action-gh-release@v1
       with:
         files: releases/*
