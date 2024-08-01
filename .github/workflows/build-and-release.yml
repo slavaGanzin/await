@@ -68,7 +68,9 @@ jobs:
           mv await releases/await_${{ github.ref_name }}_linux_amd64
         fi
 
-    - name: Upload release assets
+    - name: Set dummy ACTIONS_RUNTIME_TOKEN for act
+      if: ${{ env.ACT }}
+      run: echo "::set-env name=ACTIONS_RUNTIME_TOKEN::dummy_token"
       uses: actions/upload-artifact@v2
       with:
         name: release-binaries
