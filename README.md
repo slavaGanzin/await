@@ -8,15 +8,16 @@
 
 ### install
 ```bash
-
 # recommended way (crossplatform)
 eget slavaGanzin/await
 
+# nix
 nix-shell -p await
 
+# arch
 yay -S await
 
-# not recommended
+# not recommended, but works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
