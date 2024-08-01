@@ -72,7 +72,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
       with:
         tag_name: v1.0.1
-        release_name: await v1.0.1
+        release_name: v1.0.1
         body: Fixed ctrl-c hadling when it's run from bash script
         draft: false
         prerelease: false
