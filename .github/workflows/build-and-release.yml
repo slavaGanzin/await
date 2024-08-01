@@ -55,22 +55,10 @@ jobs:
         echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
         echo "ACTIONS_RUNTIME_URL=https://dummy_url" >> $GITHUB_ENV
 
-    - name: Upload release assets
-      uses: actions/upload-artifact@v2
-      with:
-        name: release-binaries
-        path: releases/
-
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Download release assets
-      uses: actions/download-artifact@v2
-      with:
-        name: release-binaries
-        path: .
-
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
@@ -82,3 +70,11 @@ jobs:
         body: CI/CD for mac/linux
         draft: false
         prerelease: false
+
+    - name: Upload Artifact
+      uses: softprops/action-gh-release@v1
+      with:
+        files: releases
+        tag_name: v1.0.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
