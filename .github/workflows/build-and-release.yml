@@ -78,7 +78,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
       with:
         tag_name: v1.0
-        release_name: Release v1.0
+        release_name: await v1.0
         body: CI/CD for mac/linux
         draft: false
         prerelease: false
