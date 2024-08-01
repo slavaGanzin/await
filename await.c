@@ -364,8 +364,12 @@ void *shell(void * arg) {
 
 
 int main(int argc, char *argv[]) {
-  pid_t sessionid = setsid();
-  tcsetpgrp(STDIN_FILENO, getpgrp());
+  // Ensure the program is in the foreground and can catch SIGINT when run from a bash script
+  if (tcgetpgrp(STDIN_FILENO) == getpgrp()) {
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+  }
   pthread_t exec_thread;
 
   struct sigaction sa;
