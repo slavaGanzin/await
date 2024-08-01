@@ -68,9 +68,11 @@ jobs:
           mv await releases/await_${{ github.ref_name }}_linux_amd64
         fi
 
-    - name: Set dummy ACTIONS_RUNTIME_TOKEN for act
+    - name: Set dummy ACTIONS_RUNTIME_TOKEN and ACTIONS_RUNTIME_URL for act
       if: ${{ env.ACT }}
-      run: echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
+      run: |
+        echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
+        echo "ACTIONS_RUNTIME_URL=https://dummy_url" >> $GITHUB_ENV
 
     - name: Upload release assets
       uses: actions/upload-artifact@v2
