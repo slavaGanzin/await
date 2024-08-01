@@ -11,6 +11,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            image: ubuntu:latest
+          - os: macos-latest
+            image: my-macos-image:latest
+          - os: windows-latest
+            image: my-windows-image:latest
 
     steps:
     - name: Checkout code
@@ -21,6 +28,7 @@ jobs:
       run: |
         choco install make
         choco install mingw
+      shell: cmd
 
     - name: Build on Linux and macOS
       if: matrix.os != 'windows-latest'
