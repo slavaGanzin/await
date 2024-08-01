@@ -4,6 +4,9 @@ version=`git tag --list | sort -n | tail -n 1`
 rm -rf releases
 mkdir releases
 tar czf ./releases/await_${version}_linux_amd64.tgz await
-gh release delete v${version} --yes
-gh release create v${version} ./releases/*.tgz --title "await $version" --generate-notes --latest
+if gh release view v${version} > /dev/null 2>&1; then
+  gh release upload v${version} ./releases/*.tgz --clobber
+else
+  gh release create v${version} ./releases/*.tgz --title "await $version" --generate-notes --latest
+fi
 curl https://i.jpillora.com/slavaGanzin/await! | bash
