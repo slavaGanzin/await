@@ -71,9 +71,9 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
       with:
-        tag_name: v1.0
-        release_name: await v1.0
-        body: CI/CD for mac/linux
+        tag_name: v1.0.1
+        release_name: await v1.0.1
+        body: Fixed ctrl-c hadling when it's run from bash script
         draft: false
         prerelease: false
 
@@ -93,6 +93,6 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: releases/*
-        tag_name: v1.0.0
+        tag_name: v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
