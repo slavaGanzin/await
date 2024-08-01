@@ -19,7 +19,7 @@ jobs:
             image: ubuntu:latest
           - os: macos-latest
             image: macos-latest
-          - os: windows-latest
+            #- os: windows-latest
             #image: windows-latest
 
     steps:
