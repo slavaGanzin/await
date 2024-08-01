@@ -9,7 +9,7 @@
 ### install
 ```bash
 # recommended way (crossplatform)
-eget slavaGanzin/await
+eget slavaGanzin/await --to /usr/local/bin/
 
 # nix
 nix-shell -p await
