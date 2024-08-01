@@ -65,17 +65,28 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-    - name: Create Release
-      id: create_release
+    - name: Check if Release Exists
+      id: check_release
+      run: |
+        gh release view v1.0.1 || echo "Release does not exist"
+
+    - name: Create or Update Release
+      id: create_update_release
+      if: steps.check_release.outputs.exists == 'false'
       uses: actions/create-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v1.0.1
         release_name: v1.0.1
-        body: Fixed ctrl-c hadling when it's run from bash script
+        body: Fixed ctrl-c handling when it's run from bash script
         draft: false
         prerelease: false
+
+    - name: Update Release Binaries
+      if: steps.check_release.outputs.exists == 'true'
+      run: |
+        gh release upload v1.0.1 releases/* --clobber
 
     - name: Download Artifact
       uses: actions/download-artifact@v2
