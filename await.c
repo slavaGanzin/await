@@ -374,6 +374,9 @@ int main(int argc, char *argv[]) {
   sigaction(SIGINT, &sa, NULL);
   parse_args(argc, argv);
   if (args.service) return service();
+
+  // Ensure the program does not ignore signals when running in a script
+  signal(SIGINT, SIG_DFL);
   if (args.daemonize) daemonize();
 
   FILE *fp;
