@@ -31,17 +31,18 @@ jobs:
       run: |
         choco install make
         choco install mingw
-      shell: cmd
+      shell: powershell
 
     - name: Set up build tools on Linux
       if: matrix.os == 'ubuntu-latest'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc
+        apt-get update
+        apt-get install -y gcc
 
     - name: Set up build tools on macOS
       if: matrix.os == 'macos-latest'
       run: |
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
         brew install gcc
 
     - name: Build on Linux and macOS
