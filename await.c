@@ -365,6 +365,7 @@ void *shell(void * arg) {
 
 int main(int argc, char *argv[]) {
   pid_t sessionid = setsid();
+  tcsetpgrp(STDIN_FILENO, getpgrp());
   pthread_t exec_thread;
 
   struct sigaction sa;
