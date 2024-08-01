@@ -69,7 +69,7 @@ jobs:
       uses: actions/download-artifact@v2
       with:
         name: release-binaries
-        path: releases/
+        path: .
 
     - name: Create Release
       id: create_release
