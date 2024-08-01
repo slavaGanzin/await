@@ -6,8 +6,17 @@
 [documentation](https://await-cli.app/)
 
 
-### linux install
+### install
 ```bash
+
+# recommended way (crossplatform)
+eget slavaGanzin/await
+
+nix-shell -p await
+
+yay -S await
+
+# not recommended
 curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
