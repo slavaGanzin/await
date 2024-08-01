@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -15,9 +18,9 @@ jobs:
           - os: ubuntu-latest
             image: ubuntu:latest
           - os: macos-latest
-            image: my-macos-image:latest
+            image: macos-latest
           - os: windows-latest
-            image: my-windows-image:latest
+            image: windows-latest
 
     steps:
     - name: Checkout code
