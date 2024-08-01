@@ -30,16 +30,6 @@ jobs:
         choco install mingw
       shell: powershell
 
-    - name: Set up build tools on Linux
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        apt-get install -y gcc
-
-    - name: Set up build tools on macOS
-      if: matrix.os == 'macos-latest'
-      run: |
-        brew install gcc
-
     - name: Build on Linux and macOS
       if: matrix.os != 'windows-latest'
       run: |
