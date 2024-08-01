@@ -367,7 +367,11 @@ int main(int argc, char *argv[]) {
   pid_t sessionid = setsid();
   pthread_t exec_thread;
 
-  signal(SIGINT, handle_sigint);
+  struct sigaction sa;
+  sa.sa_handler = handle_sigint;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, NULL);
   parse_args(argc, argv);
   if (args.service) return service();
   if (args.daemonize) daemonize();
