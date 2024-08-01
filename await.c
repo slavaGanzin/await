@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <pwd.h>
 #include <limits.h>
+#include <signal.h>
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -82,6 +83,8 @@ char* replace(const char* oldW, const char* newW, const char* s) {
 
     result[i] = '\0';
     return result;
+  if (args.daemonize) closelog();
+  return 0;
 }
 
 static void daemonize() {
@@ -196,6 +199,12 @@ void help() {
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
 );
   exit(0);
+}
+
+volatile sig_atomic_t stop = 0;
+
+void handle_sigint(int sig) {
+    stop = 1;
 }
 
 void parse_args(int argc, char *argv[]) {
@@ -346,6 +355,9 @@ void *shell(void * arg) {
     strcpy(c->previousOut, c->out);
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
+    if (stop) {
+      break;
+    }
     msleep(args.interval);
   }
 }
@@ -355,6 +367,7 @@ int main(int argc, char *argv[]) {
   pid_t sessionid = setsid();
   pthread_t exec_thread;
 
+  signal(SIGINT, handle_sigint);
   parse_args(argc, argv);
   if (args.service) return service();
   if (args.daemonize) daemonize();
