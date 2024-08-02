@@ -20,6 +20,7 @@ yay -S await
 # not recommended, but works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash
   --version -v	#print the version of await
+  --version -v	#print the version of await
 ```
 
 ## completions
@@ -116,6 +117,7 @@ OPTIONS:
   --interval -i	#milliseconds between one round of commands [default: 200]
   --forever -F	#do not exit ever
   --service -S	#create systemd user service with same parameters and activate it
+  --version -v	#print the version of await
   --version -v	#print the version of await
 
 
