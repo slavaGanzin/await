@@ -21,17 +21,16 @@ yay -S await
 curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
-bash
-await --autocomplete-bash > /etc/bash_completion.d/await
-
-zsh
-await --autocomplete-zsh > ~/.zsh/completion/_await
-fpath=(~/.zsh/completion $fpath)
-autoload -Uz compinit && compinit
-
 ## completions
+It's a single binary distribution, so you need to do it yourself:
 ```bash
-fish
+# bash
+await --autocomplete-bash > ~/.bashrc
+
+#zsh
+await --autocomplete-zsh > ~/.zshrc
+
+#fish
 await --autocomplete-fish > ~/.config/fish/completions/await.fish
 ```
 
