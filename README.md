@@ -21,6 +21,12 @@ yay -S await
 curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
+## completions
+```bash
+fish
+await --autocomplete-fish > ~/.config/fish/completions/await.fish
+```
+
 # With await you can:
 ### Take action on specific file type changes
 ```bash
