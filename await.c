@@ -338,12 +338,16 @@ void parse_args(int argc, char *argv[]) {
 
         switch (getopt) {
           case 0:
-            /* If this option set a flag, do nothing else now. */
-            if (long_options[option_index].flag != 0)
-              break;
-            printf ("option %s", long_options[option_index].name);
-            if (optarg) printf (" with arg %s", optarg);
-            printf ("\n");
+            if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
+              print_autocomplete_fish();
+              exit(0);
+            } else if (strcmp(long_options[option_index].name, "autocomplete-bash") == 0) {
+              print_autocomplete_bash();
+              exit(0);
+            } else if (strcmp(long_options[option_index].name, "autocomplete-zsh") == 0) {
+              print_autocomplete_zsh();
+              exit(0);
+            }
             break;
 
           case 'V': args.silent = 1; break;
