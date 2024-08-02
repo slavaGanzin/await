@@ -99,6 +99,7 @@ void print_autocomplete_fish() {
          "    return 0\n"
          "end\n"
          "complete -c await -n '__fish_await_no_subcommand' -l version -s v -d 'Print the version of await'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l version -s v -d 'Print the version of await'\n"
          "\n"
          "complete -c await -n '__fish_await_no_subcommand' -l help -d 'Print this help'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l stdout -s o -d 'Print stdout of commands'\n"
@@ -139,6 +140,7 @@ void print_autocomplete_bash() {
          "\n"
          "    COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
          "    return 0\n"
+         "    '--version[Print the version of await]' \n"
          "    '--version[Print the version of await]' \n"
          "}\n"
          "\n"
@@ -256,6 +258,7 @@ void help() {
   "  --forever -F\t#do not exit ever\n"
   "  --service -S\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t#print the version of await\n"
+  "  --version -v\t#print the version of await\n"
 
   "  --autocomplete-fish\t#output fish shell autocomplete script\n"
   "  --autocomplete-bash\t#output bash shell autocomplete script\n"
@@ -308,6 +311,7 @@ void parse_args(int argc, char *argv[]) {
             {"forever", no_argument,       0, 'F'},
             {"change",  no_argument,       0, 'c'},
             {"help",    no_argument,       0, 'h'},
+            {"version", no_argument,       0, 'v'},
             {"version", no_argument,       0, 'v'},
             {"daemon",  no_argument,       0, 'd'},
             {"service", required_argument, 0, 'S'},
@@ -365,6 +369,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
+          case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
