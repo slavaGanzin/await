@@ -259,6 +259,7 @@ void help() {
   "  --service -S\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t#print the version of await\n"
   "  --version -v\t#print the version of await\n"
+  "  --version -v\t#print the version of await\n"
 
   "  --autocomplete-fish\t#output fish shell autocomplete script\n"
   "  --autocomplete-bash\t#output bash shell autocomplete script\n"
@@ -311,6 +312,7 @@ void parse_args(int argc, char *argv[]) {
             {"forever", no_argument,       0, 'F'},
             {"change",  no_argument,       0, 'c'},
             {"help",    no_argument,       0, 'h'},
+            {"version", no_argument,       0, 'v'},
             {"version", no_argument,       0, 'v'},
             {"version", no_argument,       0, 'v'},
             {"daemon",  no_argument,       0, 'd'},
@@ -369,6 +371,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
+          case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'h': case '?': help(); break;
