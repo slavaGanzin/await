@@ -99,8 +99,6 @@ void print_autocomplete_fish() {
          "    return 0\n"
          "end\n"
          "complete -c await -n '__fish_await_no_subcommand' -l version -s v -d 'Print the version of await'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l version -s v -d 'Print the version of await'\n"
-         "\n"
          "complete -c await -n '__fish_await_no_subcommand' -l help -d 'Print this help'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l stdout -s o -d 'Print stdout of commands'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l silent -s V -d 'Do not print spinners and commands'\n"
@@ -124,7 +122,7 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --exec --interval --forever --service\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --exec --interval --forever --service --version\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --status|--exec|--interval)\n"
@@ -140,8 +138,6 @@ void print_autocomplete_bash() {
          "\n"
          "    COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
          "    return 0\n"
-         "    '--version[Print the version of await]' \n"
-         "    '--version[Print the version of await]' \n"
          "}\n"
          "\n"
          "complete -F _await await\n");
@@ -156,6 +152,7 @@ void print_autocomplete_zsh() {
          "_await() {\n"
          "  _arguments -s -S \\\n"
          "    '--help[Print this help]' \\\n"
+         "    '--version[Display version]' \\\n"
          "    '--stdout[Print stdout of commands]' \\\n"
          "    '--silent[Do not print spinners and commands]' \\\n"
          "    '--fail[Wait for commands to fail]' \\\n"
@@ -258,8 +255,6 @@ void help() {
   "  --forever -F\t#do not exit ever\n"
   "  --service -S\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t#print the version of await\n"
-  "  --version -v\t#print the version of await\n"
-  "  --version -v\t#print the version of await\n"
 
   "  --autocomplete-fish\t#output fish shell autocomplete script\n"
   "  --autocomplete-bash\t#output bash shell autocomplete script\n"
@@ -312,9 +307,6 @@ void parse_args(int argc, char *argv[]) {
             {"forever", no_argument,       0, 'F'},
             {"change",  no_argument,       0, 'c'},
             {"help",    no_argument,       0, 'h'},
-            {"version", no_argument,       0, 'v'},
-            {"version", no_argument,       0, 'v'},
-            {"version", no_argument,       0, 'v'},
             {"version", no_argument,       0, 'v'},
             {"daemon",  no_argument,       0, 'd'},
             {"service", required_argument, 0, 'S'},
@@ -372,10 +364,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
-          case 'v': printf("await version 1.0.2\n"); exit(0); break;
-          case 'v': printf("await version 1.0.2\n"); exit(0); break;
-          case 'v': printf("await version 1.0.2\n"); exit(0); break;
-          case 'v': printf("await version 1.0.2\n"); exit(0); break;
+          case 'v': printf("1.0.2\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
