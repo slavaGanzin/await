@@ -87,6 +87,87 @@ char* replace(const char* oldW, const char* newW, const char* s) {
   return 0;
 }
 
+void print_autocomplete_fish() {
+  printf("function __fish_await_no_subcommand\n"
+         "    set -l cmd (commandline -opc)\n"
+         "    for i in $cmd\n"
+         "        switch $i\n"
+         "            case --help --stdout --silent --fail --status --any --change --exec --interval --forever --service\n"
+         "                return 1\n"
+         "        end\n"
+         "    end\n"
+         "    return 0\n"
+         "end\n"
+         "\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l help -d 'Print this help'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l stdout -s o -d 'Print stdout of commands'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l silent -s V -d 'Do not print spinners and commands'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l fail -s f -d 'Waiting commands to fail'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l status -s s -d 'Expected status [default: 0]' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l any -s a -d 'Terminate if any of command return expected status'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l exec -s e -d 'Run some shell command on success' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseconds between one round of commands [default: 200]' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
+         "\n"
+         "# For command completion\n"
+         "complete -c await -f -a '(__fish_complete_command)'\n");
+}
+
+void print_autocomplete_bash() {
+  printf("_await() {\n"
+         "    local cur prev opts\n"
+         "    COMPREPLY=()\n"
+         "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+         "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
+         "\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --exec --interval --forever --service\"\n"
+         "\n"
+         "    case \"${prev}\" in\n"
+         "        --status|--exec|--interval)\n"
+         "            COMPREPLY=($(compgen -f -- \"${cur}\"))\n"
+         "            return 0\n"
+         "            ;;\n"
+         "    esac\n"
+         "\n"
+         "    if [[ ${cur} == -* ]]; then\n"
+         "        COMPREPLY=($(compgen -W \"${opts}\" -- \"${cur}\"))\n"
+         "        return 0\n"
+         "    fi\n"
+         "\n"
+         "    COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
+         "    return 0\n"
+         "}\n"
+         "\n"
+         "complete -F _await await\n");
+}
+
+void print_autocomplete_zsh() {
+  printf("# Ensure compinit is loaded\n"
+         "autoload -Uz compinit\n"
+         "compinit\n"
+         "\n"
+         "# Define the completion function for 'await'\n"
+         "_await() {\n"
+         "  _arguments -s -S \\\n"
+         "    '--help[Print this help]' \\\n"
+         "    '--stdout[Print stdout of commands]' \\\n"
+         "    '--silent[Do not print spinners and commands]' \\\n"
+         "    '--fail[Wait for commands to fail]' \\\n"
+         "    '--status[Expected status (default: 0)]::status' \\\n"
+         "    '--any[Terminate if any command returns expected status]' \\\n"
+         "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
+         "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
+         "    '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
+         "    '--forever[Do not exit ever]' \\\n"
+         "    '--service[Create systemd user service with same parameters and activate it]'\n"
+         "}\n"
+         "\n"
+         "# Register the completion function\n"
+         "compdef _await await\n");
+}
+
 static void daemonize() {
     pid_t pid;
     pid = fork();
@@ -173,6 +254,9 @@ void help() {
   "  --forever -F\t#do not exit ever\n"
   "  --service -S\t#create systemd user service with same parameters and activate it\n"
 
+  "  --autocomplete-fish\t#output fish shell autocomplete script\n"
+  "  --autocomplete-bash\t#output bash shell autocomplete script\n"
+  "  --autocomplete-zsh\t#output zsh shell autocomplete script\n"
   "\n\nNOTES:\n"
   "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
   "# you can use stdout substitution in --exec and in commands itself:\n"
@@ -226,6 +310,9 @@ void parse_args(int argc, char *argv[]) {
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
+            {"autocomplete-fish", no_argument, 0, 0},
+            {"autocomplete-bash", no_argument, 0, 0},
+            {"autocomplete-zsh", no_argument, 0, 0},
             {0, 0, 0, 0}
           };
 
@@ -271,7 +358,18 @@ void parse_args(int argc, char *argv[]) {
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
           case 'h': case '?': help(); break;
-          default: abort();
+          case 0:
+            if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
+              print_autocomplete_fish();
+              exit(0);
+            } else if (strcmp(long_options[option_index].name, "autocomplete-bash") == 0) {
+              print_autocomplete_bash();
+              exit(0);
+            } else if (strcmp(long_options[option_index].name, "autocomplete-zsh") == 0) {
+              print_autocomplete_zsh();
+              exit(0);
+            }
+            break;
         }
       }
 
