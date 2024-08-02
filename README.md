@@ -116,8 +116,6 @@ OPTIONS:
   --forever -F	#do not exit ever
   --service -S	#create systemd user service with same parameters and activate it
   --version -v	#print the version of await
-  --version -v	#print the version of await
-  --version -v	#print the version of await
 
 
 NOTES:
