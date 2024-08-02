@@ -358,14 +358,20 @@ void parse_args(int argc, char *argv[]) {
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
           case 'h': case '?': help(); break;
-          case 0:
+          case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
               print_autocomplete_fish();
               exit(0);
-            } else if (strcmp(long_options[option_index].name, "autocomplete-bash") == 0) {
+            }
+            break;
+          case 2:
+            if (strcmp(long_options[option_index].name, "autocomplete-bash") == 0) {
               print_autocomplete_bash();
               exit(0);
-            } else if (strcmp(long_options[option_index].name, "autocomplete-zsh") == 0) {
+            }
+            break;
+          case 3:
+            if (strcmp(long_options[option_index].name, "autocomplete-zsh") == 0) {
               print_autocomplete_zsh();
               exit(0);
             }
