@@ -21,6 +21,14 @@ yay -S await
 curl https://i.jpillora.com/slavaGanzin/await! | bash
 ```
 
+bash
+await --autocomplete-bash > /etc/bash_completion.d/await
+
+zsh
+await --autocomplete-zsh > ~/.zsh/completion/_await
+fpath=(~/.zsh/completion $fpath)
+autoload -Uz compinit && compinit
+
 ## completions
 ```bash
 fish
