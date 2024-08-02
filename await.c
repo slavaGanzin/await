@@ -315,6 +315,7 @@ void parse_args(int argc, char *argv[]) {
             {"version", no_argument,       0, 'v'},
             {"version", no_argument,       0, 'v'},
             {"version", no_argument,       0, 'v'},
+            {"version", no_argument,       0, 'v'},
             {"daemon",  no_argument,       0, 'd'},
             {"service", required_argument, 0, 'S'},
             {"status",  required_argument, 0, 's'},
@@ -371,6 +372,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
+          case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'v': printf("await version 1.0.2\n"); exit(0); break;
           case 'v': printf("await version 1.0.2\n"); exit(0); break;
