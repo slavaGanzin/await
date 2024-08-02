@@ -19,9 +19,6 @@ yay -S await
 
 # not recommended, but works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash
-  --version -v	#print the version of await
-  --version -v	#print the version of await
-  --version -v	#print the version of await
 ```
 
 ## completions
