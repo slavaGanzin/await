@@ -86,7 +86,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: v1.0.4
-        release_name: v1.0.3
+        release_name: v1.0.4
         body: Fixed ctrl-c handling when it's run from bash script
         draft: false
         prerelease: false
