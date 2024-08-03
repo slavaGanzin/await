@@ -36,7 +36,11 @@ jobs:
       run: |
         gcc await.c -o await.exe -lpthread
 
-    - name: Create release directory
+    - name: Generate autocompletion scripts
+      run: |
+        ./await --autocomplete-fish > releases/await.fish
+        ./await --autocomplete-bash > releases/await.bash
+        ./await --autocomplete-zsh > releases/await.zsh
       run: mkdir -p releases
 
     - name: Move binary to release directory
@@ -49,7 +53,11 @@ jobs:
           mv await releases/await_${{ github.ref_name }}_linux_amd64
         fi
 
-    - name: Upload Artifact
+    - name: Upload Autocompletion Scripts
+      uses: actions/upload-artifact@v2
+      with:
+        name: autocompletions
+        path: releases/await.*
       uses: actions/upload-artifact@v2
       with:
         name: await-${{ matrix.os }}
@@ -100,7 +108,11 @@ jobs:
         name: await-ubuntu-latest
         path: releases
 
-    - name: Upload Release Artifact
+    - name: Download Autocompletion Scripts
+      uses: actions/download-artifact@v2
+      with:
+        name: autocompletions
+        path: releases
       uses: softprops/action-gh-release@v1
       with:
         files: releases/*
