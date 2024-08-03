@@ -38,10 +38,10 @@ jobs:
 
     - name: Generate autocompletion scripts
       run: |
+        mkdir -p releases
         ./await --autocomplete-fish > releases/await.fish
         ./await --autocomplete-bash > releases/await.bash
         ./await --autocomplete-zsh > releases/await.zsh
-      run: mkdir -p releases
 
     - name: Move binary to release directory
       run: |
