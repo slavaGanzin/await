@@ -113,9 +113,13 @@ jobs:
       with:
         name: autocompletions
         path: releases
+
+    - name: Upload Release Artifacts
       uses: softprops/action-gh-release@v1
       with:
-        files: releases/*
+        files: |
+          releases/*
+          releases/await.*
         tag_name: v1.0.3
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
