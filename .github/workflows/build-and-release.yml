@@ -40,11 +40,9 @@ jobs:
       run: |
         mkdir -p releases
         mkdir -p autocompletions
-        if [ ${{ matrix.os }} == 'macos-latest' ]; then
-          ./await --autocomplete-fish > autocompletions/await.fish
-          ./await --autocomplete-bash > autocompletions/await.bash
-          ./await --autocomplete-zsh > autocompletions/await.zsh
-        end
+        ./await --autocomplete-fish > autocompletions/await.fish
+        ./await --autocomplete-bash > autocompletions/await.bash
+        ./await --autocomplete-zsh > autocompletions/await.zsh
 
     - name: Move binary to release directory
       run: |
