@@ -79,7 +79,7 @@ jobs:
     - name: Check if Release Exists
       id: check_release
       run: |
-        gh release view v1.0.4 || echo "Release does not exist"
+        gh release view v1.0.5 || echo "Release does not exist"
 
     - name: Create or Update Release
       id: create_update_release
@@ -88,8 +88,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: v1.0.4
-        release_name: v1.0.4
+        tag_name: v1.0.5
+        release_name: v1.0.5
         body: Fixed ctrl-c handling when it's run from bash script
         draft: false
         prerelease: false
@@ -97,7 +97,7 @@ jobs:
     - name: Update Release Binaries
       if: steps.check_release.outputs.exists == 'true'
       run: |
-        gh release upload v1.0.4 releases/* --clobber
+        gh release upload v1.0.5 releases/* --clobber
 
     - name: Download Artifact
       uses: actions/download-artifact@v2
@@ -124,6 +124,6 @@ jobs:
           releases/*
           releases/await.*
           autocompletions/*
-        tag_name: v1.0.4
+        tag_name: v1.0.5
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
