@@ -289,9 +289,9 @@ void help() {
 
 volatile sig_atomic_t stop = 0;
 
-void handle_sigint(int sig) {
-    stop = 1;
-}
+// void handle_sigint(int sig) {
+//     stop = 1;
+// }
 
 void parse_args(int argc, char *argv[]) {
     int getopt;
@@ -390,11 +390,13 @@ void parse_args(int argc, char *argv[]) {
     if (!args.exec && args.daemonize)
       printf("NOTICE: --daemon is kinda meaningless without --exec 'command'");
 
+    c[0].command = "";
+
     while (optind < argc) {
       strcat(args.args, " \"");
       strcat(args.args, argv[optind]);
       strcat(args.args, "\"");
-      c[args.nCommands++].command = argv[optind++];
+      c[++args.nCommands].command = argv[optind++];
     }
 
     if (args.nCommands == 0) help();
@@ -484,11 +486,12 @@ int main(int argc, char *argv[]) {
   }
   pthread_t exec_thread;
 
-  struct sigaction sa;
-  sa.sa_handler = handle_sigint;
-  sigemptyset(&sa.sa_mask);
-  sa.sa_flags = 0;
-  sigaction(SIGINT, &sa, NULL);
+  // struct sigaction sa;
+  // sa.sa_handler = handle_sigint;
+  // sigemptyset(&sa.sa_mask);
+  // sa.sa_flags = 0;
+  // sigaction(SIGINT, &sa, NULL);
+
   parse_args(argc, argv);
   if (args.service) return service();
 
@@ -544,6 +547,7 @@ int main(int argc, char *argv[]) {
               fflush(stderr);
           }
           if (exec.spinner == 0) {
+            fprintf(stderr, "\033[%dB\r", args.nCommands);
             return 0;
           }
           msleep(1);
@@ -552,5 +556,6 @@ int main(int argc, char *argv[]) {
     }
     msleep(args.interval);
   }
+
   if (args.daemonize) closelog();
 }
