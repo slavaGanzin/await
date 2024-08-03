@@ -56,6 +56,9 @@ await 'whois facebook.com' \
 
 <img src='demo/1.gif' width='100%'></img>
 
+### Version
+Current version: v1.0.5
+
 
 ### Notify yourself when your site down
 ```bash
