@@ -58,10 +58,6 @@ jobs:
       with:
         name: autocompletions
         path: releases/await.*
-      uses: actions/upload-artifact@v2
-      with:
-        name: await-${{ matrix.os }}
-        path: releases/*
 
     - name: Set dummy ACTIONS_RUNTIME_TOKEN and ACTIONS_RUNTIME_URL for act
       if: ${{ env.ACT }}
