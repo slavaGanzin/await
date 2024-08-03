@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ![build](https://github.com/slavaGanzin/await/actions/workflows/build.yaml/badge.svg)
 ./build
+
 echo """# await
 $(du -h await | sed 's/\s.*//')b, small memory footprint, single binary that run list of commands in parallel and waits for their termination
 
@@ -9,10 +10,33 @@ $(du -h await | sed 's/\s.*//')b, small memory footprint, single binary that run
 [documentation](https://await-cli.app/)
 
 
-### linux install
-\`\`\`bash
+### install
+```bash
+# recommended way (crossplatform)
+eget slavaGanzin/await --to /usr/local/bin/
+
+# nix
+nix-shell -p await
+
+# arch
+yay -S await
+
+# not recommended, but it works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash
-\`\`\`
+```
+
+### completions
+It's a single binary distribution, so you need to do it yourself (or download from a release)
+```bash
+# bash
+await --autocomplete-bash > ~/.bashrc
+
+#zsh
+await --autocomplete-zsh > ~/.zshrc
+
+#fish
+await --autocomplete-fish > ~/.config/fish/completions/await.fish
+```
 
 # With await you can:
 ### Take action on specific file type changes
