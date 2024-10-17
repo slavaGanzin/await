@@ -27,13 +27,13 @@ curl https://i.jpillora.com/slavaGanzin/await! | bash
 It's a single binary distribution, so you need to do it yourself (or download from a release)
 ```bash
 # bash
-await --autocomplete-bash > ~/.bashrc
+await --autocomplete-bash >> ~/.bashrc
 
 #zsh
-await --autocomplete-zsh > ~/.zshrc
+await --autocomplete-zsh >> ~/.zshrc
 
 #fish
-await --autocomplete-fish > ~/.config/fish/completions/await.fish
+await --autocomplete-fish >> ~/.config/fish/completions/await.fish
 ```
 
 # With await you can:
