@@ -49,18 +49,15 @@ jobs:
         gcc await.c -o ${{ matrix.os }}/await -lpthread
 
     - name: Generate autocompletion scripts
-      if: matrix.os == 'ubuntu-latest'
       run: |
         ./${{ matrix.os }}/await --autocomplete-fish > ${{ matrix.os }}/await.fish
         ./${{ matrix.os }}/await --autocomplete-bash > ${{ matrix.os }}/await.bash
         ./${{ matrix.os }}/await --autocomplete-zsh > ${{ matrix.os }}/await.zsh
-        ls -l
-        tree
 
     - name: Upload 
       uses: actions/upload-artifact@v4
       with:
-        path: .
+        pattern: ${{ matrix.os }}
 
   release:
     needs: build
