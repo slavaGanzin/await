@@ -47,7 +47,6 @@ jobs:
       run: gcc await.c -o await_${{ matrix.os }} -lpthread
 
     - name: Generate autocompletion scripts
-      if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p releases
         mkdir -p autocompletions
@@ -58,7 +57,13 @@ jobs:
     - name: Upload Binary
       uses: actions/upload-artifact@v4
       with:
-        path: await_${{ matrix.os }}|autocompletions
+        path: await_${{ matrix.os }}
+        overwrite: true
+
+    - name: Upload autocompletions
+      uses: actions/upload-artifact@v4
+      with:
+        path: autocompletions
         overwrite: true
 
   release:
