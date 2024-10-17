@@ -51,9 +51,9 @@ jobs:
       run: |
         mkdir -p releases
         mkdir -p autocompletions
-        ./await --autocomplete-fish > autocompletions/await.fish
-        ./await --autocomplete-bash > autocompletions/await.bash
-        ./await --autocomplete-zsh > autocompletions/await.zsh
+        ./await_${{ matrix.os }} --autocomplete-fish > autocompletions/await.fish
+        ./await_${{ matrix.os }} --autocomplete-bash > autocompletions/await.bash
+        ./await_${{ matrix.os }} --autocomplete-zsh > autocompletions/await.zsh
 
     - name: Upload Binary
       uses: actions/upload-artifact@v4
