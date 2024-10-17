@@ -54,8 +54,13 @@ jobs:
         ./${{ matrix.os }}/await --autocomplete-bash > ${{ matrix.os }}/await.bash
         ./${{ matrix.os }}/await --autocomplete-zsh > ${{ matrix.os }}/await.zsh
 
+    - name: Tree
+      if: matrix.os == 'ubuntu-latest'
+      run: tree
+
     - uses: actions/upload-artifact@v4
       with:
+        name: await-${{ matrix.os }}
         path: ${{ matrix.os }}
 
   release:
