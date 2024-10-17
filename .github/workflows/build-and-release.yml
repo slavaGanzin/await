@@ -29,11 +29,11 @@ jobs:
         echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
         echo "ACTIONS_RUNTIME_URL=https://dummy_url" >> $GITHUB_ENV
 
-    - name: Install GCC on Ubuntu
-      if: matrix.os == 'ubuntu-latest' && ${{env.ACT}} 
-      run: |
-        apt-get update
-        apt-get install -y gcc
+    # - name: Install GCC on Ubuntu
+    #   if: matrix.os == 'ubuntu-latest' && ${{env.ACT}} 
+    #   run: |
+    #     apt-get update
+    #     apt-get install -y gcc
 
     # - name: Install GCC on macOS
     #   if: matrix.os == 'macos-latest' && ${{ env.ACT }} 
