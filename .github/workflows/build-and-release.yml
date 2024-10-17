@@ -72,13 +72,13 @@ jobs:
         fi
 
     - name: Upload Autocompletion Scripts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: autocompletions
         path: autocompletions
 
     - name: Upload Binary
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: await-${{ matrix.os }}
         path: releases/*
