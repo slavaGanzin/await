@@ -72,6 +72,7 @@ jobs:
         fi
 
     - name: Upload Autocompletion Scripts
+      if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
         name: autocompletions
