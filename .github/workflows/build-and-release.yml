@@ -97,7 +97,7 @@ jobs:
       run: |
         mkdir -p archives
         tree
-        tar -czvf archives/await-1.0.5-aarch64-apple-darwin.tar.gz -C await-macos-latest .
+        tar -czvf archives/await-1.0.5-aarch64-x86_64-apple-darwin.tar.gz -C await-macos-latest .
         tar -czvf archives/await-1.0.5-x86_64-unknown-linux-gnu.tar.gz -C await-ubuntu-latest .
         tree
 
