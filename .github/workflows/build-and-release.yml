@@ -54,22 +54,13 @@ jobs:
         gcc await.c -o await.exe -lpthread
 
     - name: Generate autocompletion scripts
+      if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p releases
         mkdir -p autocompletions
         ./await --autocomplete-fish > autocompletions/await.fish
         ./await --autocomplete-bash > autocompletions/await.bash
         ./await --autocomplete-zsh > autocompletions/await.zsh
-
-    - name: Move binary to release directory
-      run: |
-        if [ ${{ matrix.os }} == 'windows-latest' ]; then
-          mv await.exe releases/await_${{ github.ref_name }}_windows_amd64.exe
-        elif [ ${{ matrix.os }} == 'macos-latest' ]; then
-          mv await releases/await_${{ github.ref_name }}_macos_amd64
-        else
-          mv await releases/await_${{ github.ref_name }}_linux_amd64
-        fi
 
     - name: Upload Autocompletion Scripts
       if: matrix.os == 'ubuntu-latest'
@@ -78,10 +69,21 @@ jobs:
         name: autocompletions
         path: autocompletions
 
+    # - name: Move binary to release directory
+    #   run: |
+    #     if [ ${{ matrix.os }} == 'windows-latest' ]; then
+    #       mv await.exe releases/await_${{ github.ref_name }}_windows_amd64.exe
+    #     elif [ ${{ matrix.os }} == 'macos-latest' ]; then
+    #       mv await releases/await_${{ github.ref_name }}_macos_amd64
+    #     else
+    #       mv await releases/await_${{ github.ref_name }}_linux_amd64
+    #     fi
+
+
     - name: Upload Binary
       uses: actions/upload-artifact@v4
       with:
-        name: await-${{ matrix.os }}
+        # name: await-${{ matrix.os }}
         path: releases/*
 
 
