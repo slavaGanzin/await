@@ -53,7 +53,6 @@ jobs:
         ./${{ matrix.os }}/await --autocomplete-fish > ${{ matrix.os }}/await.fish
         ./${{ matrix.os }}/await --autocomplete-bash > ${{ matrix.os }}/await.bash
         ./${{ matrix.os }}/await --autocomplete-zsh > ${{ matrix.os }}/await.zsh
-        tree
 
     - uses: actions/upload-artifact@v4
       with:
