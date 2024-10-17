@@ -58,7 +58,7 @@ jobs:
     - name: Upload Binary
       uses: actions/upload-artifact@v4
       with:
-        path: '*'
+        path: await_${{ matrix.os }}|autocompletions
         overwrite: true
 
   release:
