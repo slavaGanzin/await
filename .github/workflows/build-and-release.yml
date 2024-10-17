@@ -48,22 +48,16 @@ jobs:
 
     - name: Generate autocompletion scripts
       run: |
-        mkdir -p releases
-        mkdir -p autocompletions
-        ./await_${{ matrix.os }} --autocomplete-fish > autocompletions/await.fish
-        ./await_${{ matrix.os }} --autocomplete-bash > autocompletions/await.bash
-        ./await_${{ matrix.os }} --autocomplete-zsh > autocompletions/await.zsh
+        mkdir dist
+        ./await_${{ matrix.os }} --autocomplete-fish > dist/await.fish
+        ./await_${{ matrix.os }} --autocomplete-bash > dist/await.bash
+        ./await_${{ matrix.os }} --autocomplete-zsh > dist/await.zsh
+        mv await_${{ matrix.os }} dist/
 
-    - name: Upload Binary
+    - name: Upload 
       uses: actions/upload-artifact@v4
       with:
-        path: await_${{ matrix.os }}
-        overwrite: true
-
-    - name: Upload autocompletions
-      uses: actions/upload-artifact@v4
-      with:
-        path: autocompletions
+        path: dist
         overwrite: true
 
   release:
