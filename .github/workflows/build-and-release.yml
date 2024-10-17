@@ -23,6 +23,23 @@ jobs:
             #image: windows-latest
 
     steps:
+    - name: Set dummy ACTIONS_RUNTIME_TOKEN and ACTIONS_RUNTIME_URL for act
+      if: ${{ env.ACT }}
+      run: |
+        echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
+        echo "ACTIONS_RUNTIME_URL=https://dummy_url" >> $GITHUB_ENV
+
+    - name: Install GCC on Ubuntu
+      if: matrix.os == 'ubuntu-latest' && ${{env.ACT}} 
+      run: |
+        apt-get update
+        apt-get install -y gcc
+
+    # - name: Install GCC on macOS
+    #   if: matrix.os == 'macos-latest' && ${{ env.ACT }} 
+    #   run: |
+    #     brew install gcc
+
     - name: Checkout code
       uses: actions/checkout@v2
 
@@ -66,11 +83,6 @@ jobs:
         name: await-${{ matrix.os }}
         path: releases/*
 
-    - name: Set dummy ACTIONS_RUNTIME_TOKEN and ACTIONS_RUNTIME_URL for act
-      if: ${{ env.ACT }}
-      run: |
-        echo "ACTIONS_RUNTIME_TOKEN=dummy_token" >> $GITHUB_ENV
-        echo "ACTIONS_RUNTIME_URL=https://dummy_url" >> $GITHUB_ENV
 
   release:
     needs: build
@@ -79,7 +91,7 @@ jobs:
     - name: Check if Release Exists
       id: check_release
       run: |
-        gh release view v1.0.5 || echo "Release does not exist"
+        gh release view 1.0.5 || echo "Release does not exist"
 
     - name: Create or Update Release
       id: create_update_release
@@ -88,35 +100,41 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: v1.0.5
-        release_name: v1.0.5
+        tag_name: 1.0.5
+        release_name: 1.0.5
         body: Fixed ctrl-c handling when it's run from bash script
         draft: false
         prerelease: false
 
-    - name: Update Release Binaries
+    - name: Create Archives
+      run: |
+        mkdir -p archives
+        tar -czvf archives/await-1.0.5-aarch64-apple-darwin.tar.gz -C releases await-macos-latest
+        tar -czvf archives/await-1.0.5-x86_64-unknown-linux-gnu.tar.gz -C releases await-ubuntu-latest
+
+    - name: Update Release Archives
       if: steps.check_release.outputs.exists == 'true'
       run: |
-        gh release upload v1.0.5 releases/* --clobber
+        gh release upload 1.0.5 archives/* --clobber
 
     - name: Download Artifact
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
       with:
         name: await-macos-latest
         path: releases
 
     - name: Download Artifact
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
       with:
         name: await-ubuntu-latest
         path: releases
 
     - name: Download Autocompletion Scripts
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v4
       with:
         name: autocompletions
         path: autocompletions
-
+    
     - name: Upload Release Artifacts
       uses: softprops/action-gh-release@v1
       with:
@@ -124,6 +142,6 @@ jobs:
           releases/*
           releases/await.*
           autocompletions/*
-        tag_name: v1.0.5
+        tag_name: 1.0.5
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
