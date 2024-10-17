@@ -121,20 +121,9 @@ jobs:
     - name: Download Artifact
       uses: actions/download-artifact@v4
       with:
-        name: await-macos-latest
-        path: releases
-
-    - name: Download Artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: await-ubuntu-latest
-        path: releases
-
-    - name: Download Autocompletion Scripts
-      uses: actions/download-artifact@v4
-      with:
-        name: autocompletions
-        path: autocompletions
+        path: |
+          releases
+          autocompletions
     
     - name: Upload Release Artifacts
       uses: softprops/action-gh-release@v1
