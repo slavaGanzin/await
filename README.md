@@ -10,6 +10,8 @@
 ```bash
 # recommended way (crossplatform)
 eget slavaGanzin/await --to /usr/local/bin/
+# or
+stew i slavaGanzin/await
 
 # nix
 nix-shell -p await
