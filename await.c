@@ -433,6 +433,7 @@ int service() {
   fclose(fp);
 
   system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
+  return 0;
 }
 
 void *shell(void * arg) {
@@ -558,4 +559,5 @@ int main(int argc, char *argv[]) {
   }
 
   if (args.daemonize) closelog();
+  return 0;
 }
