@@ -55,10 +55,13 @@ jobs:
         ./${{ matrix.os }}/await --autocomplete-bash > ${{ matrix.os }}/await.bash
         ./${{ matrix.os }}/await --autocomplete-zsh > ${{ matrix.os }}/await.zsh
 
+    - name: tree
+      run: tree
+
     - name: Upload 
       uses: actions/upload-artifact@v4
       with:
-        path: ${{ matrix.os }}
+        path: .
 
   release:
     needs: build
