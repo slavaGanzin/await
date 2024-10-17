@@ -44,14 +44,7 @@ jobs:
       uses: actions/checkout@v2
 
     - name: Build on Linux and macOS
-      if: matrix.os != 'windows-latest'
-      run: |
-        gcc await.c -o await -lpthread
-
-    - name: Build on Windows
-      if: matrix.os == 'windows-latest'
-      run: |
-        gcc await.c -o await.exe -lpthread
+      run: gcc await.c -o await_${{ matrix.os }} -lpthread
 
     - name: Generate autocompletion scripts
       if: matrix.os == 'ubuntu-latest'
@@ -62,30 +55,8 @@ jobs:
         ./await --autocomplete-bash > autocompletions/await.bash
         ./await --autocomplete-zsh > autocompletions/await.zsh
 
-    - name: Upload Autocompletion Scripts
-      if: matrix.os == 'ubuntu-latest'
-      uses: actions/upload-artifact@v4
-      with:
-        name: autocompletions
-        path: autocompletions
-
-    # - name: Move binary to release directory
-    #   run: |
-    #     if [ ${{ matrix.os }} == 'windows-latest' ]; then
-    #       mv await.exe releases/await_${{ github.ref_name }}_windows_amd64.exe
-    #     elif [ ${{ matrix.os }} == 'macos-latest' ]; then
-    #       mv await releases/await_${{ github.ref_name }}_macos_amd64
-    #     else
-    #       mv await releases/await_${{ github.ref_name }}_linux_amd64
-    #     fi
-
-
     - name: Upload Binary
       uses: actions/upload-artifact@v4
-      with:
-        # name: await-${{ matrix.os }}
-        path: await
-
 
   release:
     needs: build
