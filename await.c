@@ -510,7 +510,7 @@ int main(int argc, char *argv[]) {
   int not_done;
   while (1) {
     not_done = 0;
-    for(int i = 0; i < args.nCommands; i++) {
+    for(int i = 0; i <= args.nCommands; i++) {
       if (!args.silent) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
@@ -548,10 +548,9 @@ int main(int argc, char *argv[]) {
               fflush(stderr);
           }
           if (exec.spinner == 0) {
-            fprintf(stderr, "\033[%dB\r", args.nCommands);
+            fprintf(stderr, "\033[%dB\r", args.nCommands+1);
             return 0;
           }
-          msleep(1);
         }
       }
     }
