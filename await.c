@@ -364,7 +364,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.daemonize = 1; break;
-          case 'v': printf("1.0.6\n"); exit(0); break;
+          case 'v': printf("1.0.7\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -502,18 +502,20 @@ int main(int argc, char *argv[]) {
 
   FILE *fp;
 
-  for(int i = 0; i < args.nCommands; i++) {
+  for(int i = 0; i <= args.nCommands; i++) {
     c[i].status = -1;
     pthread_create(&c[i].thread, NULL, shell, &c[i]);
   }
 
   int not_done;
+
   while (1) {
     not_done = 0;
     for(int i = 0; i <= args.nCommands; i++) {
       if (!args.silent) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
-        fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", i, color, spinner[c[i].spinner], c[i].command, i);
+        int line = i;
+        fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", line, color, spinner[c[i].spinner], c[i].command, line);
       }
       if (args.stdout && c[i].out) {
         printf("%s", c[i].out);
@@ -549,6 +551,7 @@ int main(int argc, char *argv[]) {
           }
           if (exec.spinner == 0) {
             fprintf(stderr, "\033[%dB\r", args.nCommands+1);
+            fprintf(stderr, "");
             return 0;
           }
         }
