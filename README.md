@@ -106,18 +106,19 @@ await [arguments] commands
 # runs list of commands and waits for their termination
 
 OPTIONS:
-  --help	#print this help
-  --stdout -o	#print stdout of commands
-  --silent -V	#do not print spinners and commands
-  --fail -f	#waiting commands to fail
-  --status -s	#expected status [default: 0]
-  --any -a	#terminate if any of command return expected status
-  --change -c	#waiting for stdout to change and ignore status codes
-  --exec -e	#run some shell command on success;
-  --interval -i	#milliseconds between one round of commands [default: 200]
-  --forever -F	#do not exit ever
-  --service -S	#create systemd user service with same parameters and activate it
-  --version -v	#print the version of await
+  --help		#print this help
+  --stdout -o		#print stdout of commands
+  --no-stderr -E	#surpress stderr of commands by adding 2>/dev/null to commands
+  --silent -V		#do not print spinners and commands
+  --fail -f		#waiting commands to fail
+  --status -s		#expected status [default: 0]
+  --any -a		#terminate if any of command return expected status
+  --change -c		#waiting for stdout to change and ignore status codes
+  --exec -e		#run some shell command on success;
+  --interval -i		#milliseconds between one round of commands [default: 200]
+  --forever -F		#do not exit ever
+  --service -S		#create systemd user service with same parameters and activate it
+  --version -v		#print the version of await
   --autocomplete-fish	#output fish shell autocomplete script
   --autocomplete-bash	#output bash shell autocomplete script
   --autocomplete-zsh	#output zsh shell autocomplete script

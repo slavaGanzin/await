@@ -42,6 +42,7 @@ typedef struct {
   char* service;
   char* args;
   int nCommands;
+  int no_stderr;
 } ARGS;
 
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args=""};
@@ -110,6 +111,7 @@ void print_autocomplete_fish() {
          "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseconds between one round of commands [default: 200]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
          "\n"
          "# For command completion\n"
          "complete -c await -f -a '(__fish_complete_command)'\n");
@@ -122,7 +124,7 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --exec --interval --forever --service --version\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --exec --interval --forever --service --version --no-stderr\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --status|--exec|--interval)\n"
@@ -154,6 +156,7 @@ void print_autocomplete_zsh() {
          "    '--help[Print this help]' \\\n"
          "    '--version[Display version]' \\\n"
          "    '--stdout[Print stdout of commands]' \\\n"
+         "    '--no-stderr[Surpress stderr of commands by adding 2>/dev/null to commands]' \\\n"
          "    '--silent[Do not print spinners and commands]' \\\n"
          "    '--fail[Wait for commands to fail]' \\\n"
          "    '--status[Expected status (default: 0)]::status' \\\n"
@@ -228,7 +231,7 @@ int msleep(long msec)
     return res;
 }
 
-char * replace_outs(char *string) {
+char * replace_placeholders(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
     if (!c[i].previousOut) continue;
     char C[3];
@@ -243,18 +246,19 @@ void help() {
   printf("await [arguments] commands\n\n"
   "# runs list of commands and waits for their termination\n"
   "\nOPTIONS:\n"
-  "  --help\t#print this help\n"
-  "  --stdout -o\t#print stdout of commands\n"
-  "  --silent -V\t#do not print spinners and commands\n"
-  "  --fail -f\t#waiting commands to fail\n"
-  "  --status -s\t#expected status [default: 0]\n"
-  "  --any -a\t#terminate if any of command return expected status\n"
-  "  --change -c\t#waiting for stdout to change and ignore status codes\n"
-  "  --exec -e\t#run some shell command on success;\n"
-  "  --interval -i\t#milliseconds between one round of commands [default: 200]\n"
-  "  --forever -F\t#do not exit ever\n"
-  "  --service -S\t#create systemd user service with same parameters and activate it\n"
-  "  --version -v\t#print the version of await\n"
+  "  --help\t\t#print this help\n"
+  "  --stdout -o\t\t#print stdout of commands\n"
+  "  --no-stderr -E\t#surpress stderr of commands by adding 2>/dev/null to commands\n"
+  "  --silent -V\t\t#do not print spinners and commands\n"
+  "  --fail -f\t\t#waiting commands to fail\n"
+  "  --status -s\t\t#expected status [default: 0]\n"
+  "  --any -a\t\t#terminate if any of command return expected status\n"
+  "  --change -c\t\t#waiting for stdout to change and ignore status codes\n"
+  "  --exec -e\t\t#run some shell command on success;\n"
+  "  --interval -i\t\t#milliseconds between one round of commands [default: 200]\n"
+  "  --forever -F\t\t#do not exit ever\n"
+  "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
+  "  --version -v\t\t#print the version of await\n"
 
   "  --autocomplete-fish\t#output fish shell autocomplete script\n"
   "  --autocomplete-bash\t#output bash shell autocomplete script\n"
@@ -313,6 +317,7 @@ void parse_args(int argc, char *argv[]) {
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
+            {"no-stderr", no_argument, 0, 'E'},
             {"autocomplete-fish", no_argument, 0, 0},
             {"autocomplete-bash", no_argument, 0, 0},
             {"autocomplete-zsh", no_argument, 0, 0},
@@ -320,7 +325,7 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:E", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -384,6 +389,7 @@ void parse_args(int argc, char *argv[]) {
               exit(0);
             }
             break;
+          case 'E': args.no_stderr = 1; break;
         }
       }
 
@@ -397,6 +403,9 @@ void parse_args(int argc, char *argv[]) {
       strcat(args.args, argv[optind]);
       strcat(args.args, "\"");
       c[++args.nCommands].command = argv[optind++];
+      if (args.no_stderr) {
+        strcat(c[args.nCommands].command, " 2>/dev/null");
+      }
     }
 
     if (args.nCommands == 0) help();
@@ -446,7 +455,7 @@ void *shell(void * arg) {
   while (1) {
     c->outPos = 0;
     strcpy(c->out, "");
-    FILE *fp = popen(replace_outs(c->command), "r");
+    FILE *fp = popen(replace_placeholders(c->command), "r");
     c->pid = fileno(fp);
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
