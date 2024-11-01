@@ -4,7 +4,7 @@ _await() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    opts="--help --stdout --silent --fail --status --any --change --exec --interval --forever --service --version"
+    opts="--help --stdout --silent --fail --status --any --change --exec --interval --forever --service --version --no-stderr"
 
     case "${prev}" in
         --status|--exec|--interval)

@@ -20,6 +20,7 @@ complete -c await -n '__fish_await_no_subcommand' -l exec -s e -d 'Run some shel
 complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseconds between one round of commands [default: 200]' -r
 complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'
 complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'
+complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'
 
 # For command completion
 complete -c await -f -a '(__fish_complete_command)'
