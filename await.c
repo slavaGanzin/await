@@ -241,14 +241,38 @@ char * replace_placeholders(char *string) {
   return string;
 }
 
+char * colorize_comments(char *string) {
+  string = replace("#", "\033[33m#", string);
+  string = replace("\n", "\033[0m\n", string);
+  return string;
+}
 
 void help() {
-  printf("await [arguments] commands\n\n"
+  printf("%s", colorize_comments("await [options] commands\n\n"
   "# runs list of commands and waits for their termination\n"
+  "\n\nEXAMPLES:\n"
+  "# wait until your deployment is ready\n"
+  "  await 'curl 127.0.0.1:3000/healthz' \\\n\t'kubectl wait --for=condition=Ready pod it-takes-forever-8545bd6b54-fk5dz' \\\n\t\"docker inspect --format='{{json .State.Running}}' elasticsearch 2>/dev/null | grep true\" \n\n"
+  "# action on specific file type changes\n"
+  "  await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'\n\n"
+  "# waiting google (or your internet connection) to fail\n"
+  "  await 'curl google.com' --fail\n\n"
+  "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
+  "  await 'curl google.com' --status 7\n\n"
+  "# waits for redis socket and then connects to\n"
+  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
+  "# lazy version\n"
+  "  await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock\n\n"
+  "# daily checking if I am on french reviera. Just in case\n"
+  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
+  "# Yet another server monitor\n"
+  "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --change\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\"\n\n"
+  "# waiting for new iPhone in daemon mode\n"
+  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --change --interval 86400 --daemon --exec \"ntfy send \\1\"\n\n"
   "\nOPTIONS:\n"
   "  --help\t\t#print this help\n"
   "  --stdout -o\t\t#print stdout of commands\n"
-  "  --no-stderr -E\t#surpress stderr of commands by adding 2>/dev/null to commands\n"
+  "  --no-stderr -E\t#surpress stderr of commands by adding 2>/dev/null to commands (doesn't work with pipes)\n"
   "  --silent -V\t\t#do not print spinners and commands\n"
   "  --fail -f\t\t#waiting commands to fail\n"
   "  --status -s\t\t#expected status [default: 0]\n"
@@ -267,27 +291,10 @@ void help() {
   "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
   "# you can use stdout substitution in --exec and in commands itself:\n"
   "  await 'echo -n 10' 'echo -n $RANDOM' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
-  "\n\nEXAMPLES:\n"
-  "# action on specific file type changes\n"
-  " await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'\n\n"
-  "# waiting google (or your internet connection) to fail\n"
-  "  await 'curl google.com' --fail\n\n"
-  "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
-  "  await 'curl google.com' --status 7\n\n"
-  "# waits for redis socket and then connects to\n"
-  "  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'\n\n"
-  "# lazy version\n"
-  "  await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock\n\n"
-  "# daily checking if I am on french reviera. Just in case\n"
-  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
-  "# Yet another server monitor\n"
-  "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --change\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\"\n\n"
-  "# waiting for new iPhone in daemon mode\n"
-  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --change --interval 86400 --daemon --exec \"ntfy send \\1\"\n\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
-);
+  ));
   exit(0);
 }
 
