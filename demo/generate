@@ -31,7 +31,14 @@
 # terminalizer render demo/6 -o demo/6.gif
 # chromium demo/6.gif
 
-echo "await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'" | xclip
-terminalizer record demo/7 --skip-sharing --command fish --config demo/template
-terminalizer render demo/7 -o demo/7.gif
-chromium demo/7.gif
+# echo "await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'" | xclip
+# terminalizer record demo/7 --skip-sharing --command fish --config demo/template
+# terminalizer render demo/7 -o demo/7.gif
+# chromium demo/7.gif
+
+echo "await 'curl 127.0.0.1:3000/healthz' \
+	'kubectl wait --for=condition=Ready pod it-takes-forever-8545bd6b54-fk5dz' \
+	\"docker inspect --format='{{json .State.Running}}' elasticsearch 2>/dev/null | grep true\""
+terminalizer record demo/8 --skip-sharing --command fish --config demo/template
+terminalizer render demo/8 -o demo/8.gif
+# chromium demo/8.gif

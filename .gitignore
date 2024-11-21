@@ -4,3 +4,4 @@ await-cli.app/
 aur/
 await
 .aider*
+.env

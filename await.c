@@ -253,6 +253,10 @@ void help() {
   "\n\nEXAMPLES:\n"
   "# wait until your deployment is ready\n"
   "  await 'curl 127.0.0.1:3000/healthz' \\\n\t'kubectl wait --for=condition=Ready pod it-takes-forever-8545bd6b54-fk5dz' \\\n\t\"docker inspect --format='{{json .State.Running}}' elasticsearch 2>/dev/null | grep true\" \n\n"
+
+  "# emulate watch https://linux.die.net/man/1/watch\n"
+  "  await 'clear; du -h /tmp/file' 'dd if=/dev/random of=/tmp/file bs=1M count=1000 2>/dev/null' -of --silent\n\n"
+
   "# action on specific file type changes\n"
   "  await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'\n\n"
   "# waiting google (or your internet connection) to fail\n"
@@ -523,31 +527,42 @@ int main(int argc, char *argv[]) {
     pthread_create(&c[i].thread, NULL, shell, &c[i]);
   }
 
-  int not_done;
+  int not_done = 0;
+    // TODO: make a clear screen option
+    // fprintf(stdout, "\033[2J\033[H");
+    // fprintf(stderr, "\033[2J\033[H");
+    // fflush(stdout);
+    // fflush(stderr);
 
   while (1) {
     not_done = 0;
-    for(int i = 0; i <= args.nCommands; i++) {
+    int line = 0;
+
+    for(int i = 1; i <= args.nCommands; i++) {
+      line+=1;
+
       if (!args.silent) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
-        int line = i;
         fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", line, color, spinner[c[i].spinner], c[i].command, line);
+        fflush(stderr);
       }
+
       if (args.stdout && c[i].out) {
-        printf("%s", c[i].out);
-        strcpy(c[i].out, "");
+        int line_count = 0;
+        for (char *p = c[i].out; *p != '\0'; p++) {
+            if (*p == '\n') {
+                line_count++;
+            }
+        }
+        line += line_count;
+        fprintf(stdout, "\033[%dB\r%s\033[%dA\r", line-line_count+1, c[i].out, line+1);
+        fflush(stdout);
       }
 
       if (args.change) not_done =  !c[i].change;
       else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
     }
-    if (exec.out) {
-        printf("%s", exec.out);
-        strcpy(exec.out, "");
-    }
 
-    fflush(stdout);
-    fflush(stderr);
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
       if (args.exec) {
@@ -559,15 +574,8 @@ int main(int argc, char *argv[]) {
       if (!args.forever) {
         while (1) {
           int color = exec.status == -1 ? 7 : exec.status == args.expectedStatus ? 2 : 1;
-          if (exec.out && !args.silent) {
-              printf("%s", exec.out);
-              strcpy(exec.out, "");
-              fflush(stdout);
-              fflush(stderr);
-          }
           if (exec.spinner == 0) {
-            fprintf(stderr, "\033[%dB\r", args.nCommands+1);
-            fprintf(stderr, "");
+            fprintf(stderr, "\033[%dB\r", line+1);
             return 0;
           }
         }
