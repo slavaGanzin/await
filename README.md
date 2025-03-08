@@ -5,6 +5,13 @@
 
 # ![build](https://github.com/slavaGanzin/await/actions/workflows/build-and-release.yml/badge.svg)
 
+### build
+
+```bash
+meson setup build/ --prefix /usr
+meson compile -C build/
+sudo meson install -C build/
+```
 
 ### install
 ```bash
