@@ -5,3 +5,4 @@ aur/
 await
 .aider*
 .env
+tests/__pycache__

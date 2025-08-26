@@ -354,6 +354,75 @@ class TestEdgeCases:
         assert "test" in clean_stdout
 
 
+class TestDiffMode:
+    """Test the -d (diff) flag functionality."""
+    
+    def test_diff_flag_in_help(self):
+        """Test that --diff flag appears in help."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            "--help",
+            description="Should show diff flag in help text"
+        )
+        assert returncode == 0
+        assert "--diff -d" in stdout
+        assert "highlight differences" in stdout
+    
+    def test_diff_mode_with_changing_output(self):
+        """Test diff highlighting with changing counter output."""
+        # Create a script that outputs incrementing counter
+        script_content = """#!/bin/bash
+if [ ! -f /tmp/counter ]; then
+    echo 0 > /tmp/counter
+fi
+count=$(cat /tmp/counter)
+echo "{\\"counter\\": $count}"
+echo $((count + 1)) > /tmp/counter
+"""
+        with open("/tmp/test_counter.sh", "w") as f:
+            f.write(script_content)
+        
+        try:
+            # Make script executable
+            import os
+            os.chmod("/tmp/test_counter.sh", 0o755)
+            
+            # Initialize counter
+            with open("/tmp/counter", "w") as f:
+                f.write("100")
+            
+            # Test with diff mode - should exit after a few iterations showing differences
+            returncode, stdout, stderr = run_await_with_timeout(
+                '--diff -fVo "/tmp/test_counter.sh; false"',
+                timeout=3.0,
+                description="Should highlight changing numbers in JSON output"
+            )
+            
+            assert returncode == 0
+            # Should contain highlighted differences (ANSI escape codes for highlighting)
+            assert "\033[32m" in stdout  # Green text highlighting
+            
+        finally:
+            # Clean up
+            import os
+            for f in ["/tmp/test_counter.sh", "/tmp/counter"]:
+                if os.path.exists(f):
+                    os.remove(f)
+    
+    def test_diff_mode_no_changes(self):
+        """Test diff mode with static output (no highlighting)."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--diff -fVo "echo \\'static output\\'; false"',
+            timeout=2.0,
+            description="Should show static output without highlighting"
+        )
+        
+        assert returncode == 0
+        clean_stdout = strip_ansi_escape_codes(stdout)
+        assert "static output" in clean_stdout
+        # Should not contain highlighting escape codes since output doesn't change
+        assert stdout.count("\033[32m") <= 1  # Maybe one highlight on first change detection
+
+
 class TestRealWorldScenarios:
     """Test real-world usage scenarios."""
     

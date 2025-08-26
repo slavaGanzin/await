@@ -145,12 +145,13 @@ EXAMPLES:
 OPTIONS:
   --help		#print this help
   --stdout -o		#print stdout of commands
-  --no-stderr -E	#surpress stderr of commands by adding 2>/dev/null to commands (doesn't work with pipes)
+  --no-stderr -E	#suppress stderr output from commands
   --silent -V		#do not print spinners and commands
   --fail -f		#waiting commands to fail
   --status -s		#expected status [default: 0]
   --any -a		#terminate if any of command return expected status
   --change -c		#waiting for stdout to change and ignore status codes
+  --diff -d		#highlight differences between previous and current output (like watch -d)
   --exec -e		#run some shell command on success;
   --interval -i		#milliseconds between one round of commands [default: 200]
   --forever -F		#do not exit ever

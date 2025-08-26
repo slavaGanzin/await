@@ -10,6 +10,8 @@
 #include <pwd.h>
 #include <limits.h>
 #include <signal.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -18,6 +20,7 @@ typedef struct {
   char *command;
   char *out;
   char *previousOut;
+  char *diffOut;  // For storing difference-highlighted output
   size_t outPos;
   int status;
   int change;
@@ -38,6 +41,7 @@ typedef struct {
   int daemonize;
   int fail;
   int stdout;
+  int diff;
   char *exec;
   char* service;
   char* args;
@@ -93,7 +97,7 @@ void print_autocomplete_fish() {
          "    set -l cmd (commandline -opc)\n"
          "    for i in $cmd\n"
          "        switch $i\n"
-         "            case --help --stdout --silent --fail --status --any --change --exec --interval --forever --service\n"
+         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service\n"
          "                return 1\n"
          "        end\n"
          "    end\n"
@@ -107,6 +111,7 @@ void print_autocomplete_fish() {
          "complete -c await -n '__fish_await_no_subcommand' -l status -s s -d 'Expected status [default: 0]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l any -s a -d 'Terminate if any of command return expected status'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l diff -s d -d 'Highlight differences between previous and current output'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l exec -s e -d 'Run some shell command on success' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseconds between one round of commands [default: 200]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
@@ -124,7 +129,7 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --exec --interval --forever --service --version --no-stderr\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --version --no-stderr\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --status|--exec|--interval)\n"
@@ -162,6 +167,7 @@ void print_autocomplete_zsh() {
          "    '--status[Expected status (default: 0)]::status' \\\n"
          "    '--any[Terminate if any command returns expected status]' \\\n"
          "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
+         "    '--diff[Highlight differences between previous and current output]' \\\n"
          "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
          "    '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
@@ -247,6 +253,73 @@ char * colorize_comments(char *string) {
   return string;
 }
 
+char * highlight_differences(const char *old_text, const char *new_text) {
+  if (!old_text || !new_text) return NULL;
+  if (strcmp(old_text, new_text) == 0) return NULL; // No differences
+  
+  int old_len = strlen(old_text);
+  int new_len = strlen(new_text);
+  
+  // Allocate enough space for highlighted text (worst case: every char highlighted)
+  char *highlighted = malloc(new_len * 10); // Generous space for ANSI codes
+  highlighted[0] = '\0';
+  
+  int old_pos = 0, new_pos = 0;
+  int in_diff = 0;
+  
+  // Simple character-by-character diff
+  while (new_pos < new_len) {
+    if (old_pos < old_len && old_text[old_pos] == new_text[new_pos]) {
+      // Characters match
+      if (in_diff) {
+        strcat(highlighted, "\033[0m"); // End highlighting
+        in_diff = 0;
+      }
+      // Add the matching character
+      int len = strlen(highlighted);
+      highlighted[len] = new_text[new_pos];
+      highlighted[len + 1] = '\0';
+      old_pos++;
+      new_pos++;
+    } else {
+      // Characters differ or we're at different positions
+      if (!in_diff) {
+        strcat(highlighted, "\033[32m"); // Start highlighting (green text)
+        in_diff = 1;
+      }
+      
+      // Add the differing character from new text
+      int len = strlen(highlighted);
+      highlighted[len] = new_text[new_pos];
+      highlighted[len + 1] = '\0';
+      new_pos++;
+      
+      // Skip characters in old text until we find a match or reach the end
+      if (old_pos < old_len) {
+        // Look ahead to see if we can find a match
+        int found_match = 0;
+        for (int lookahead = 1; lookahead <= 10 && (old_pos + lookahead) < old_len; lookahead++) {
+          if (new_pos < new_len && old_text[old_pos + lookahead] == new_text[new_pos]) {
+            old_pos += lookahead;
+            found_match = 1;
+            break;
+          }
+        }
+        if (!found_match) {
+          old_pos++;
+        }
+      }
+    }
+  }
+  
+  // Close highlighting if still open
+  if (in_diff) {
+    strcat(highlighted, "\033[0m");
+  }
+  
+  return highlighted;
+}
+
 void help() {
   printf("%s", colorize_comments("await [options] commands\n\n"
   "# runs list of commands and waits for their termination\n"
@@ -276,12 +349,13 @@ void help() {
   "\nOPTIONS:\n"
   "  --help\t\t#print this help\n"
   "  --stdout -o\t\t#print stdout of commands\n"
-  "  --no-stderr -E\t#surpress stderr of commands by adding 2>/dev/null to commands (doesn't work with pipes)\n"
+  "  --no-stderr -E\t#suppress stderr output from commands\n"
   "  --silent -V\t\t#do not print spinners and commands\n"
   "  --fail -f\t\t#waiting commands to fail\n"
   "  --status -s\t\t#expected status [default: 0]\n"
   "  --any -a\t\t#terminate if any of command return expected status\n"
   "  --change -c\t\t#waiting for stdout to change and ignore status codes\n"
+  "  --diff -d\t\t#highlight differences between previous and current output (like watch -d)\n"
   "  --exec -e\t\t#run some shell command on success;\n"
   "  --interval -i\t\t#milliseconds between one round of commands [default: 200]\n"
   "  --forever -F\t\t#do not exit ever\n"
@@ -323,7 +397,7 @@ void parse_args(int argc, char *argv[]) {
             {"change",  no_argument,       0, 'c'},
             {"help",    no_argument,       0, 'h'},
             {"version", no_argument,       0, 'v'},
-            {"daemon",  no_argument,       0, 'd'},
+            {"diff",    no_argument,       0, 'd'},
             {"service", required_argument, 0, 'S'},
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
@@ -379,8 +453,8 @@ void parse_args(int argc, char *argv[]) {
           case 'c': args.change = 1; break;
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
-          case 'd': args.daemonize = 1; break;
-          case 'v': printf("1.0.8\n"); exit(0); break;
+          case 'd': args.diff = 1; break;
+          case 'v': printf("2.0.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -414,9 +488,6 @@ void parse_args(int argc, char *argv[]) {
       strcat(args.args, argv[optind]);
       strcat(args.args, "\"");
       c[++args.nCommands].command = argv[optind++];
-      if (args.no_stderr) {
-        strcat(c[args.nCommands].command, " 2>/dev/null");
-      }
     }
 
     if (args.nCommands == 0) help();
@@ -461,13 +532,37 @@ void *shell(void * arg) {
   c->out = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
   c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  c->diffOut = NULL;
 
   char buf[BUF_SIZE];
   while (1) {
     c->outPos = 0;
     strcpy(c->out, "");
-    FILE *fp = popen(replace_placeholders(c->command), "r");
-    c->pid = fileno(fp);
+    
+    int pipefd[2];
+    pipe(pipefd);
+    
+    pid_t child_pid = fork();
+    if (child_pid == 0) {
+      // Child process
+      close(pipefd[0]); // Close read end
+      dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
+      
+      if (args.no_stderr) {
+        // Redirect stderr to /dev/null
+        int devnull = open("/dev/null", O_WRONLY);
+        dup2(devnull, STDERR_FILENO);
+        close(devnull);
+      }
+      
+      close(pipefd[1]);
+      execl("/bin/sh", "sh", "-c", replace_placeholders(c->command), NULL);
+      exit(1);
+    } else {
+      // Parent process
+      close(pipefd[1]); // Close write end
+      FILE *fp = fdopen(pipefd[0], "r");
+      c->pid = child_pid;
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
       c->outPos += BUF_SIZE;
@@ -481,11 +576,22 @@ void *shell(void * arg) {
 
     if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
     c->spinner--;
-    int status = pclose(fp);
+    
+    fclose(fp);
+    int status;
+    waitpid(c->pid, &status, 0);
     c->status = WEXITSTATUS(status);
+    }
 
-    if (strcmp(c->previousOut, "first run") != 0)
+    if (strcmp(c->previousOut, "first run") != 0) {
       c->change = strcmp(c->previousOut,c->out) != 0;
+      
+      // Compute differences if diff mode is enabled
+      if (args.diff && c->change) {
+        if (c->diffOut) free(c->diffOut);
+        c->diffOut = highlight_differences(c->previousOut, c->out);
+      }
+    }
 
     strcpy(c->previousOut, c->out);
 
@@ -573,7 +679,11 @@ int main(int argc, char *argv[]) {
         if (args.stdout) {
           char *output_to_show = NULL;
           
-          if (c[i].out && strlen(c[i].out) > 0) {
+          // If diff mode is enabled and we have diff output, use that
+          if (args.diff && c[i].diffOut) {
+            output_to_show = malloc(strlen(c[i].diffOut) + 1);
+            strcpy(output_to_show, c[i].diffOut);
+          } else if (c[i].out && strlen(c[i].out) > 0) {
             // Use current output
             output_to_show = malloc(strlen(c[i].out) + 1);
             strcpy(output_to_show, c[i].out);
@@ -631,7 +741,11 @@ int main(int argc, char *argv[]) {
         for(int i = 1; i <= args.nCommands; i++) {
           char *output_to_show = NULL;
           
-          if (c[i].out && strlen(c[i].out) > 0) {
+          // If diff mode is enabled and we have diff output, use that
+          if (args.diff && c[i].diffOut) {
+            output_to_show = malloc(strlen(c[i].diffOut) + 1);
+            strcpy(output_to_show, c[i].diffOut);
+          } else if (c[i].out && strlen(c[i].out) > 0) {
             // Use current output
             output_to_show = malloc(strlen(c[i].out) + 1);
             strcpy(output_to_show, c[i].out);
