@@ -495,6 +495,7 @@ void *shell(void * arg) {
     }
     msleep(args.interval);
   }
+  return NULL;
 }
 
 
@@ -534,35 +535,151 @@ int main(int argc, char *argv[]) {
     // fflush(stdout);
     // fflush(stderr);
 
+  static int first_output = 1;
+  static char *last_display = NULL;
+  static char *last_silent_output = NULL;
+  
   while (1) {
     not_done = 0;
-    int line = 0;
-
-    for(int i = 1; i <= args.nCommands; i++) {
-      line+=1;
-
-      if (!args.silent) {
-        int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
-        fprintf(stderr, "\033[%dB\r\033[K\033[0;3%dm%s\033[0m %s\033[%dA\r", line, color, spinner[c[i].spinner], c[i].command, line);
-        fflush(stderr);
-      }
-
-      if (args.stdout && c[i].out) {
-        int line_count = 0;
-        for (char *p = c[i].out; *p != '\0'; p++) {
-            if (*p == '\n') {
-                line_count++;
-            }
+    
+    if (!args.silent) {
+      // Clear previous output by going to beginning of last display
+      if (last_display) {
+        int lines = 0;
+        for (char *p = last_display; *p; p++) {
+          if (*p == '\n') lines++;
         }
-        line += line_count;
-        fprintf(stdout, "\033[%dB\r%s\033[%dA\r", line-line_count+1, c[i].out, line+1);
-        fflush(stdout);
+        if (lines > 0) {
+          fprintf(stderr, "\033[%dA\033[J", lines);
+        } else {
+          fprintf(stderr, "\r\033[K");
+        }
+        free(last_display);
       }
-
-      if (args.change) not_done =  !c[i].change;
-      else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+      
+      // Build the entire display string first
+      char *display = malloc(10000); // Large buffer for display
+      strcpy(display, "");
+      
+      for(int i = 1; i <= args.nCommands; i++) {
+        int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
+        
+        // Add status line
+        char status_line[1000];
+        sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].command);
+        strcat(display, status_line);
+        
+        // Add output if available, or previous output if command has run before
+        if (args.stdout) {
+          char *output_to_show = NULL;
+          
+          if (c[i].out && strlen(c[i].out) > 0) {
+            // Use current output
+            output_to_show = malloc(strlen(c[i].out) + 1);
+            strcpy(output_to_show, c[i].out);
+          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0 && strcmp(c[i].previousOut, "first run") != 0) {
+            // Use previous output if current is empty but we have previous
+            output_to_show = malloc(strlen(c[i].previousOut) + 1);
+            strcpy(output_to_show, c[i].previousOut);
+          }
+          
+          if (output_to_show) {
+            int len = strlen(output_to_show);
+            if (len > 0 && output_to_show[len - 1] == '\n') {
+                output_to_show[len - 1] = '\0';
+            }
+            strcat(display, output_to_show);
+            strcat(display, "\n");
+            free(output_to_show);
+          }
+        }
+        
+        if (args.change) not_done =  !c[i].change;
+        else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+      }
+      
+      // Print the entire display at once
+      fprintf(stderr, "%s", display);
+      fflush(stderr);
+      
+      // Save this display for next iteration
+      last_display = display;
+    } else {
+      // Silent mode - handle stdout only, similar to non-silent mode with clearing
+      if (args.stdout) {
+        // Clear previous silent output (but not on first run)
+        if (last_silent_output && !first_output) {
+          int lines = 0;
+          for (char *p = last_silent_output; *p; p++) {
+            if (*p == '\n') lines++;
+          }
+          if (lines > 0) {
+            printf("\033[%dA\033[J", lines);
+          } else {
+            printf("\r\033[K");
+          }
+          free(last_silent_output);
+        } else if (last_silent_output) {
+          free(last_silent_output);
+        }
+        
+        // Build silent output display
+        char *silent_display = malloc(10000);
+        strcpy(silent_display, "");
+        int has_output = 0;
+        
+        for(int i = 1; i <= args.nCommands; i++) {
+          char *output_to_show = NULL;
+          
+          if (c[i].out && strlen(c[i].out) > 0) {
+            // Use current output
+            output_to_show = malloc(strlen(c[i].out) + 1);
+            strcpy(output_to_show, c[i].out);
+          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0 && strcmp(c[i].previousOut, "first run") != 0) {
+            // Use previous output if current is empty but we have previous
+            output_to_show = malloc(strlen(c[i].previousOut) + 1);
+            strcpy(output_to_show, c[i].previousOut);
+          }
+          
+          if (output_to_show) {
+            int len = strlen(output_to_show);
+            if (len > 0 && output_to_show[len - 1] == '\n') {
+                output_to_show[len - 1] = '\0';
+            }
+            
+            if (has_output) {
+              strcat(silent_display, "\n");
+            }
+            strcat(silent_display, output_to_show);
+            has_output = 1;
+            free(output_to_show);
+          }
+          
+          if (args.change) not_done =  !c[i].change;
+          else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+        }
+        
+        // Print the silent display
+        if (has_output) {
+          if (first_output) {
+            printf("%s", silent_display);
+            first_output = 0;
+          } else {
+            printf("\r%s", silent_display);
+          }
+          fflush(stdout);
+          last_silent_output = silent_display;
+        } else {
+          free(silent_display);
+        }
+      } else {
+        // No stdout mode, just check status
+        for(int i = 1; i <= args.nCommands; i++) {
+          if (args.change) not_done =  !c[i].change;
+          else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+        }
+      }
     }
-
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
       if (args.exec) {
@@ -575,7 +692,7 @@ int main(int argc, char *argv[]) {
         while (1) {
           int color = exec.status == -1 ? 7 : exec.status == args.expectedStatus ? 2 : 1;
           if (exec.spinner == 0) {
-            fprintf(stderr, "\033[%dB\r", line+1);
+            fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
             return 0;
           }
         }
