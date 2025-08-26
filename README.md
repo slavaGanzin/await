@@ -98,6 +98,26 @@ sudo systemctl restart redis; await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/r
 
 <img src='demo/6.gif' width='100%'></img>
 
+### Watch command output with diff highlighting
+```bash
+# Like watch -d, highlight only the changing parts
+await 'date +%s' --diff --forever --stdout --silent --interval 1000
+
+# Monitor API responses and highlight changes 
+await 'curl -s https://api.example.com/status | jq .counter' --diff --forever --stdout --silent
+
+# Watch file changes with visual diff
+await 'wc -l *.log' --diff --change --forever --stdout
+```
+
+### Better stderr handling
+```bash
+# Suppress stderr without affecting pipes or command structure
+await 'curl -s https://unreliable-api.com || echo failed' --no-stderr
+
+# Clean output even with noisy commands
+await 'some-verbose-command' 'another-command' --no-stderr --stdout --silent
+```
 
 ## --help
 ```bash
