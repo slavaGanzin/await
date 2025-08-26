@@ -14,6 +14,7 @@ _await() {
     '--status[Expected status (default: 0)]::status' \
     '--any[Terminate if any command returns expected status]' \
     '--change[Wait for stdout to change and ignore status codes]' \
+    '--diff[Highlight differences between previous and current output]' \
     '--exec[Run some shell command on success]::command:_command_names' \
     '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \
     '--forever[Do not exit ever]' \
