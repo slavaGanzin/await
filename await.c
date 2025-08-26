@@ -97,7 +97,7 @@ void print_autocomplete_fish() {
          "    set -l cmd (commandline -opc)\n"
          "    for i in $cmd\n"
          "        switch $i\n"
-         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service\n"
+         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --watch\n"
          "                return 1\n"
          "        end\n"
          "    end\n"
@@ -117,6 +117,7 @@ void print_autocomplete_fish() {
          "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
          "\n"
          "# For command completion\n"
          "complete -c await -f -a '(__fish_complete_command)'\n");
@@ -129,7 +130,7 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --version --no-stderr\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --version --no-stderr --watch\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --status|--exec|--interval)\n"
@@ -171,6 +172,7 @@ void print_autocomplete_zsh() {
          "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
          "    '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
+         "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]'\n"
          "}\n"
          "\n"
@@ -350,6 +352,7 @@ void help() {
   "  --help\t\t#print this help\n"
   "  --stdout -o\t\t#print stdout of commands\n"
   "  --no-stderr -E\t#suppress stderr output from commands\n"
+  "  --watch -w\t\t#equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)\n"
   "  --silent -V\t\t#do not print spinners and commands\n"
   "  --fail -f\t\t#waiting commands to fail\n"
   "  --status -s\t\t#expected status [default: 0]\n"
@@ -403,6 +406,7 @@ void parse_args(int argc, char *argv[]) {
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
             {"no-stderr", no_argument, 0, 'E'},
+            {"watch", no_argument, 0, 'w'},
             {"autocomplete-fish", no_argument, 0, 0},
             {"autocomplete-bash", no_argument, 0, 0},
             {"autocomplete-zsh", no_argument, 0, 0},
@@ -410,7 +414,7 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:E", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:Ew", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -454,7 +458,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.0.0\n"); exit(0); break;
+          case 'v': printf("2.1.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -475,6 +479,13 @@ void parse_args(int argc, char *argv[]) {
             }
             break;
           case 'E': args.no_stderr = 1; break;
+          case 'w': 
+            args.fail = 1; 
+            args.silent = 1; 
+            args.stdout = 1; 
+            args.diff = 1; 
+            args.no_stderr = 1; 
+            break;
         }
       }
 

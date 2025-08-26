@@ -119,6 +119,18 @@ await 'curl -s https://unreliable-api.com || echo failed' --no-stderr
 await 'some-verbose-command' 'another-command' --no-stderr --stdout --silent
 ```
 
+### Watch mode for clean monitoring
+```bash
+# Equivalent to: await 'uptime' -fVodE  
+await 'uptime' --watch
+
+# Monitor system resources with clean diff output
+await 'ps aux | head -10' --watch --interval 2000
+
+# Watch log file changes with highlighted differences
+await 'tail -5 /var/log/system.log' --watch
+```
+
 ## --help
 ```bash
 await [options] commands
@@ -166,6 +178,7 @@ OPTIONS:
   --help		#print this help
   --stdout -o		#print stdout of commands
   --no-stderr -E	#suppress stderr output from commands
+  --watch -w		#equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)
   --silent -V		#do not print spinners and commands
   --fail -f		#waiting commands to fail
   --status -s		#expected status [default: 0]

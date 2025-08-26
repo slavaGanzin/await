@@ -121,6 +121,18 @@ await 'curl -s https://unreliable-api.com || echo "failed"' --no-stderr
 await 'some-verbose-command' 'another-command' --no-stderr --stdout --silent
 \`\`\`
 
+### Watch mode for clean monitoring
+\`\`\`bash
+# Equivalent to: await 'uptime' -fVodE  
+await 'uptime' --watch
+
+# Monitor system resources with clean diff output
+await 'ps aux | head -10' --watch --interval 2000
+
+# Watch log file changes with highlighted differences
+await 'tail -5 /var/log/system.log' --watch
+\`\`\`
+
 ## --help
 \`\`\`bash
 $(./await --help | sed 's/\x1b\[[0-9;]*m//g')
