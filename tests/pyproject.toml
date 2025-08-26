@@ -1,0 +1,21 @@
+[project]
+name = "await-tests"
+version = "0.1.0"
+description = "Tests for await CLI tool"
+authors = [{name = "Slava", email = "slava.ganzin@gmail.com"}]
+requires-python = ">=3.8"
+dependencies = [
+    "pytest>=7.0.0",
+    "pytest-timeout>=2.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "-s",  # Disable output capture to see our descriptive output
+]
