@@ -5,6 +5,13 @@
 
 # ![build](https://github.com/slavaGanzin/await/actions/workflows/build-and-release.yml/badge.svg)
 
+### build
+
+```bash
+cmake -B build/ --install-prefix /usr
+cmake --build build/
+sudo cmake --install build/
+```
 
 ### install
 ```bash
