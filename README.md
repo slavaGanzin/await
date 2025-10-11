@@ -5,6 +5,7 @@
 
 # ![build](https://github.com/slavaGanzin/await/actions/workflows/build-and-release.yml/badge.svg)
 
+**Platform support:** Linux and macOS only
 
 ### install
 ```bash
