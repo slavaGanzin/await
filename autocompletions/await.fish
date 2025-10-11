@@ -2,7 +2,7 @@ function __fish_await_no_subcommand
     set -l cmd (commandline -opc)
     for i in $cmd
         switch $i
-            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service
+            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --watch
                 return 1
         end
     end
@@ -22,6 +22,7 @@ complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseco
 complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'
 complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'
 complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'
+complete -c await -n '__fish_await_no_subcommand' -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'
 
 # For command completion
 complete -c await -f -a '(__fish_complete_command)'

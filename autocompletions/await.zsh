@@ -18,6 +18,7 @@ _await() {
     '--exec[Run some shell command on success]::command:_command_names' \
     '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \
     '--forever[Do not exit ever]' \
+    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \
     '--service[Create systemd user service with same parameters and activate it]'
 }
 
