@@ -45,14 +45,13 @@ jobs:
 
     - name: Build on Linux and macOS
       run: |
-        mkdir ${{ matrix.os }}
-        gcc await.c -o ${{ matrix.os }}/await -lpthread
-
-    - name: Generate autocompletion scripts
-      run: |
-        ./${{ matrix.os }}/await --autocomplete-fish > ${{ matrix.os }}/await.fish
-        ./${{ matrix.os }}/await --autocomplete-bash > ${{ matrix.os }}/await.bash
-        ./${{ matrix.os }}/await --autocomplete-zsh > ${{ matrix.os }}/await.zsh
+        cmake -B build/
+        cmake --build build/
+        mkdir -p ${{ matrix.os }}
+        cp build/await ${{ matrix.os }}/
+        cp build/await.fish ${{ matrix.os }}/
+        cp build/await.bash ${{ matrix.os }}/
+        cp build/await.zsh ${{ matrix.os }}/
 
     - name: Tree
       if: matrix.os == 'ubuntu-latest'
@@ -72,12 +71,13 @@ jobs:
 
     - name: Build await to get version
       run: |
-        gcc await.c -o await -lpthread
+        cmake -B build/
+        cmake --build build/
 
     - name: Get version from await CLI
       id: get_version
       run: |
-        VERSION=$(./await --version)
+        VERSION=$(./build/await --version)
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "Version: $VERSION"
 

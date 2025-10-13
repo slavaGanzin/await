@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-gcc await.c -o await -l pthread
-mkdir -p autocompletions 2>/dev/null
-./await --autocomplete-fish > autocompletions/await.fish
-./await --autocomplete-bash > autocompletions/await.bash
-./await --autocomplete-zsh > autocompletions/await.zsh

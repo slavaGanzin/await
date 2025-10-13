@@ -458,7 +458,7 @@ void parse_args(int argc, char *argv[]) {
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.1.0\n"); exit(0); break;
+          case 'v': printf("2.2.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
