@@ -43,7 +43,8 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
 
-    - name: Build on Linux and macOS
+    - name: Build on Linux
+      if: matrix.os == 'ubuntu-latest'
       run: |
         cmake -B build/
         cmake --build build/
@@ -53,14 +54,49 @@ jobs:
         cp build/await.bash ${{ matrix.os }}/
         cp build/await.zsh ${{ matrix.os }}/
 
+    - name: Build on macOS (arm64)
+      if: matrix.os == 'macos-latest'
+      run: |
+        cmake -B build-arm64/ -DCMAKE_OSX_ARCHITECTURES=arm64
+        cmake --build build-arm64/
+        mkdir -p macos-latest-arm64
+        cp build-arm64/await macos-latest-arm64/
+        cp build-arm64/await.fish macos-latest-arm64/
+        cp build-arm64/await.bash macos-latest-arm64/
+        cp build-arm64/await.zsh macos-latest-arm64/
+
+    - name: Build on macOS (x86_64)
+      if: matrix.os == 'macos-latest'
+      run: |
+        cmake -B build-x86_64/ -DCMAKE_OSX_ARCHITECTURES=x86_64
+        cmake --build build-x86_64/
+        mkdir -p macos-latest-x86_64
+        cp build-x86_64/await macos-latest-x86_64/
+        cp build-x86_64/await.fish macos-latest-x86_64/
+        cp build-x86_64/await.bash macos-latest-x86_64/
+        cp build-x86_64/await.zsh macos-latest-x86_64/
+
     - name: Tree
       if: matrix.os == 'ubuntu-latest'
       run: tree
 
     - uses: actions/upload-artifact@v4
+      if: matrix.os == 'ubuntu-latest'
       with:
         name: await-${{ matrix.os }}
         path: ${{ matrix.os }}
+
+    - uses: actions/upload-artifact@v4
+      if: matrix.os == 'macos-latest'
+      with:
+        name: await-macos-latest-arm64
+        path: macos-latest-arm64
+
+    - uses: actions/upload-artifact@v4
+      if: matrix.os == 'macos-latest'
+      with:
+        name: await-macos-latest-x86_64
+        path: macos-latest-x86_64
 
   release:
     needs: build
@@ -111,7 +147,8 @@ jobs:
       run: |
         mkdir -p archives
         tree
-        cd await-macos-latest && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-aarch64-x86_64-apple-darwin.tar.gz * && cd ..
+        cd await-macos-latest-arm64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-aarch64-apple-darwin.tar.gz * && cd ..
+        cd await-macos-latest-x86_64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-apple-darwin.tar.gz * && cd ..
         cd await-ubuntu-latest && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-unknown-linux-gnu.tar.gz * && cd ..
         tree
 
