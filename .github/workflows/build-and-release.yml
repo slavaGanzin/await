@@ -45,14 +45,13 @@ jobs:
 
     - name: Build on Linux and macOS
       run: |
-        mkdir ${{ matrix.os }}
-        gcc await.c -o ${{ matrix.os }}/await -lpthread
-
-    - name: Generate autocompletion scripts
-      run: |
-        ./${{ matrix.os }}/await --autocomplete-fish > ${{ matrix.os }}/await.fish
-        ./${{ matrix.os }}/await --autocomplete-bash > ${{ matrix.os }}/await.bash
-        ./${{ matrix.os }}/await --autocomplete-zsh > ${{ matrix.os }}/await.zsh
+        cmake -B build/
+        cmake --build build/
+        mkdir -p ${{ matrix.os }}
+        cp build/await ${{ matrix.os }}/
+        cp build/await.fish ${{ matrix.os }}/
+        cp build/await.bash ${{ matrix.os }}/
+        cp build/await.zsh ${{ matrix.os }}/
 
     - name: Tree
       if: matrix.os == 'ubuntu-latest'
@@ -70,7 +69,7 @@ jobs:
     - name: Check if Release Exists
       id: check_release
       run: |
-        gh release view 1.0.8 || echo "Release does not exist"
+        gh release view 1.0.10 || echo "Release does not exist"
 
     - name: Create or Update Release
       id: create_update_release
@@ -79,16 +78,16 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: 1.0.8
-        release_name: 1.0.8
-        body: Fixed ctrl-c handling when it's run from bash script
+        tag_name: 1.0.10
+        release_name: 1.0.10
+        body: CMake build system
         draft: false
         prerelease: false
 
     - name: Update Release Archives
       if: steps.check_release.outputs.exists == 'true'
       run: |
-        gh release upload 1.0.8 archives/* --clobber
+        gh release upload 1.0.10 archives/* --clobber
 
     - name: Download Artifact
       uses: actions/download-artifact@v4
@@ -97,14 +96,14 @@ jobs:
       run: |
         mkdir -p archives
         tree
-        tar -czvf archives/await-1.0.8-aarch64-x86_64-apple-darwin.tar.gz -C await-macos-latest .
-        tar -czvf archives/await-1.0.8-x86_64-unknown-linux-gnu.tar.gz -C await-ubuntu-latest .
+        tar -czvf archives/await-1.0.10-aarch64-x86_64-apple-darwin.tar.gz -C await-macos-latest .
+        tar -czvf archives/await-1.0.10-x86_64-unknown-linux-gnu.tar.gz -C await-ubuntu-latest .
         tree
 
     - name: Upload Release Artifacts
       uses: softprops/action-gh-release@v1
       with:
         files: archives/*
-        tag_name: 1.0.8
+        tag_name: 1.0.10
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
