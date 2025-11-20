@@ -31,15 +31,22 @@ curl https://i.jpillora.com/slavaGanzin/await! | bash
 \`\`\`
 
 ### completions
-It's a single binary distribution, so you need to do it yourself (or download from a release)
+Install shell completions automatically for all detected shells:
+\`\`\`bash
+await --autocompletions
+\`\`\`
+
+This command will detect which shells (bash, zsh, fish) are installed and automatically install completions for each one, providing status feedback for each shell.
+
+Alternatively, install completions manually for specific shells:
 \`\`\`bash
 # bash
 await --autocomplete-bash >> ~/.bashrc
 
-#zsh
+# zsh
 await --autocomplete-zsh >> ~/.zshrc
 
-#fish
+# fish
 await --autocomplete-fish >> ~/.config/fish/completions/await.fish
 \`\`\`
 
