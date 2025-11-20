@@ -180,6 +180,81 @@ void print_autocomplete_zsh() {
          "compdef _await await\n");
 }
 
+void install_autocompletions() {
+  const char *home;
+  if ((home = getenv("HOME")) == NULL) {
+    home = getpwuid(getuid())->pw_dir;
+  }
+
+  // Get the path to the current binary
+  char binary_path[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", binary_path, sizeof(binary_path) - 1);
+  if (len == -1) {
+    // Fallback to "await" if we can't get the binary path
+    strcpy(binary_path, "await");
+  } else {
+    binary_path[len] = '\0';
+  }
+
+  printf("Detecting installed shells and installing completions...\n\n");
+
+  // Check bash
+  if (access("/bin/bash", F_OK) == 0 || access("/usr/bin/bash", F_OK) == 0) {
+    printf("✓ bash found\n");
+    char bashrc[PATH_MAX];
+    snprintf(bashrc, sizeof(bashrc), "%s/.bashrc", home);
+    char cmd[PATH_MAX * 4];
+    snprintf(cmd, sizeof(cmd), "'%s' --autocomplete-bash >> '%s' 2>/dev/null", binary_path, bashrc);
+    int ret = system(cmd);
+    if (ret == 0) {
+      printf("  → completions installed to ~/.bashrc\n");
+    } else {
+      printf("  → failed to install completions\n");
+    }
+  } else {
+    printf("✗ bash not found\n");
+  }
+
+  // Check zsh
+  if (access("/bin/zsh", F_OK) == 0 || access("/usr/bin/zsh", F_OK) == 0) {
+    printf("✓ zsh found\n");
+    char zshrc[PATH_MAX];
+    snprintf(zshrc, sizeof(zshrc), "%s/.zshrc", home);
+    char cmd[PATH_MAX * 4];
+    snprintf(cmd, sizeof(cmd), "'%s' --autocomplete-zsh >> '%s' 2>/dev/null", binary_path, zshrc);
+    int ret = system(cmd);
+    if (ret == 0) {
+      printf("  → completions installed to ~/.zshrc\n");
+    } else {
+      printf("  → failed to install completions\n");
+    }
+  } else {
+    printf("✗ zsh not found\n");
+  }
+
+  // Check fish
+  if (access("/bin/fish", F_OK) == 0 || access("/usr/bin/fish", F_OK) == 0) {
+    printf("✓ fish found\n");
+    char fish_dir[PATH_MAX];
+    snprintf(fish_dir, sizeof(fish_dir), "%s/.config/fish/completions", home);
+    char fish_file[PATH_MAX];
+    snprintf(fish_file, sizeof(fish_file), "%s/await.fish", fish_dir);
+    char cmd[PATH_MAX * 4];
+    snprintf(cmd, sizeof(cmd), "mkdir -p '%s' 2>/dev/null && '%s' --autocomplete-fish >> '%s' 2>/dev/null", fish_dir, binary_path, fish_file);
+    int ret = system(cmd);
+    if (ret == 0) {
+      printf("  → completions installed to ~/.config/fish/completions/await.fish\n");
+    } else {
+      printf("  → failed to install completions\n");
+    }
+  } else {
+    printf("✗ fish not found\n");
+  }
+
+  printf("\nAutocompletions installation complete!\n");
+  exit(0);
+}
+
 static void daemonize() {
     pid_t pid;
     pid = fork();
@@ -365,6 +440,7 @@ void help() {
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
 
+  "  --autocompletions\t#detect installed shells and auto-install completions for all of them\n"
   "  --autocomplete-fish\t#output fish shell autocomplete script\n"
   "  --autocomplete-bash\t#output bash shell autocomplete script\n"
   "  --autocomplete-zsh\t#output zsh shell autocomplete script\n"
@@ -407,6 +483,7 @@ void parse_args(int argc, char *argv[]) {
             {"interval",required_argument, 0, 'i'},
             {"no-stderr", no_argument, 0, 'E'},
             {"watch", no_argument, 0, 'w'},
+            {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
             {"autocomplete-bash", no_argument, 0, 0},
             {"autocomplete-zsh", no_argument, 0, 0},
@@ -435,7 +512,10 @@ void parse_args(int argc, char *argv[]) {
 
         switch (getopt) {
           case 0:
-            if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
+            if (strcmp(long_options[option_index].name, "autocompletions") == 0) {
+              install_autocompletions();
+              exit(0);
+            } else if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
               print_autocomplete_fish();
               exit(0);
             } else if (strcmp(long_options[option_index].name, "autocomplete-bash") == 0) {
