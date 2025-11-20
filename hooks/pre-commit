@@ -36,7 +36,19 @@ Install shell completions automatically for all detected shells:
 await --autocompletions
 \`\`\`
 
-This command will detect which shells (bash, zsh, fish) are installed and automatically install completions for each one, providing status feedback for each shell.
+This command will detect which shells (bash, zsh, fish) are installed and automatically install completions for each one, providing status feedback for each shell:
+
+\`\`\`
+Detecting installed shells and installing completions...
+
+✓ bash found
+  → completions installed to ~/.bashrc
+✓ zsh found
+  → completions installed to ~/.zshrc
+✗ fish not found
+
+Autocompletions installation complete!
+\`\`\`
 
 Alternatively, install completions manually for specific shells:
 \`\`\`bash
