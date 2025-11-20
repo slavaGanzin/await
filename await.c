@@ -204,7 +204,8 @@ void install_autocompletions() {
     char bashrc[PATH_MAX];
     snprintf(bashrc, sizeof(bashrc), "%s/.bashrc", home);
     char cmd[PATH_MAX * 4];
-    snprintf(cmd, sizeof(cmd), "'%s' --autocomplete-bash >> '%s' 2>/dev/null", binary_path, bashrc);
+    // Check if completions already exist, only append if not present
+    snprintf(cmd, sizeof(cmd), "grep -q '_await' '%s' 2>/dev/null || '%s' --autocomplete-bash >> '%s' 2>/dev/null", bashrc, binary_path, bashrc);
     int ret = system(cmd);
     if (ret == 0) {
       printf("  → completions installed to ~/.bashrc\n");
@@ -221,7 +222,8 @@ void install_autocompletions() {
     char zshrc[PATH_MAX];
     snprintf(zshrc, sizeof(zshrc), "%s/.zshrc", home);
     char cmd[PATH_MAX * 4];
-    snprintf(cmd, sizeof(cmd), "'%s' --autocomplete-zsh >> '%s' 2>/dev/null", binary_path, zshrc);
+    // Check if completions already exist, only append if not present
+    snprintf(cmd, sizeof(cmd), "grep -q '_await' '%s' 2>/dev/null || '%s' --autocomplete-zsh >> '%s' 2>/dev/null", zshrc, binary_path, zshrc);
     int ret = system(cmd);
     if (ret == 0) {
       printf("  → completions installed to ~/.zshrc\n");
@@ -240,7 +242,8 @@ void install_autocompletions() {
     char fish_file[PATH_MAX];
     snprintf(fish_file, sizeof(fish_file), "%s/await.fish", fish_dir);
     char cmd[PATH_MAX * 4];
-    snprintf(cmd, sizeof(cmd), "mkdir -p '%s' 2>/dev/null && '%s' --autocomplete-fish >> '%s' 2>/dev/null", fish_dir, binary_path, fish_file);
+    // Check if completions already exist, only append if not present
+    snprintf(cmd, sizeof(cmd), "mkdir -p '%s' 2>/dev/null && (grep -q '__fish_await' '%s' 2>/dev/null || '%s' --autocomplete-fish >> '%s' 2>/dev/null)", fish_dir, fish_file, binary_path, fish_file);
     int ret = system(cmd);
     if (ret == 0) {
       printf("  → completions installed to ~/.config/fish/completions/await.fish\n");
