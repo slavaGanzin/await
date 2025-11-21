@@ -531,7 +531,7 @@ class TestPlaceholderSubstitution:
         # Using printf instead of echo -n for POSIX compatibility
         returncode, stdout, stderr = run_await_with_timeout(
             '-o --silent "printf 10" "printf 15" "expr \\\\1 + \\\\2"',
-            timeout=3.0,
+            timeout=5.0,  # Increased timeout for macOS compatibility with substitution
             description="Should match documentation example behavior"
         )
         assert returncode == 0
