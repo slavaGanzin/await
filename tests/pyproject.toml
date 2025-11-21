@@ -14,6 +14,7 @@ testpaths = ["."]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+timeout = 30
 addopts = [
     "-v",
     "--tb=short",
