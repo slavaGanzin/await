@@ -528,8 +528,9 @@ class TestPlaceholderSubstitution:
         """Test the example from help documentation."""
         # This example from the help text should work
         # Note: We can't test --forever directly, so we'll verify the placeholders work
+        # Using printf instead of echo -n for POSIX compatibility
         returncode, stdout, stderr = run_await_with_timeout(
-            '-o --silent "echo -n 10" "echo -n 15" "expr \\\\1 + \\\\2"',
+            '-o --silent "printf 10" "printf 15" "expr \\\\1 + \\\\2"',
             timeout=3.0,
             description="Should match documentation example behavior"
         )
