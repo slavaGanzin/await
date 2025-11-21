@@ -43,6 +43,11 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
     - name: Build on Linux
       if: matrix.os == 'ubuntu-latest'
       run: |
@@ -53,6 +58,8 @@ jobs:
         cp build/await.fish ${{ matrix.os }}/
         cp build/await.bash ${{ matrix.os }}/
         cp build/await.zsh ${{ matrix.os }}/
+        # Copy binary to project root for tests
+        cp build/await ./await
 
     - name: Build on macOS (arm64)
       if: matrix.os == 'macos-latest'
@@ -75,6 +82,19 @@ jobs:
         cp build-x86_64/await.fish macos-latest-x86_64/
         cp build-x86_64/await.bash macos-latest-x86_64/
         cp build-x86_64/await.zsh macos-latest-x86_64/
+        # Copy x86_64 binary to project root for tests on macOS
+        cp build-x86_64/await ./await
+
+    - name: Install test dependencies
+      working-directory: tests
+      run: |
+        pip install -e .
+        pip install pytest pytest-timeout
+
+    - name: Run tests
+      working-directory: tests
+      run: |
+        pytest test_await.py -v
 
     - name: Tree
       if: matrix.os == 'ubuntu-latest'
@@ -100,6 +120,7 @@ jobs:
 
   release:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
