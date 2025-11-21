@@ -6,4 +6,7 @@ await
 .aider*
 .env
 tests/__pycache__
+tests/*.egg-info
+tests/.pytest_cache
+.pytest_cache
 build/
