@@ -29,6 +29,15 @@ jobs:
       run: |
         cmake -B build/
         cmake --build build/
+        ls -la build/
+        if [ -f build/await ]; then
+          cp build/await ./await
+          ls -la ./await
+        else
+          echo "Binary not found at build/await"
+          find build/ -name "await" -o -name "await.exe"
+          exit 1
+        fi
 
     - name: Install test dependencies
       working-directory: tests
@@ -40,3 +49,4 @@ jobs:
       working-directory: tests
       run: |
         pytest test_await.py -v
+
