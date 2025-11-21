@@ -198,11 +198,11 @@ void install_autocompletions() {
 
   printf("Detecting installed shells and installing completions...\n\n");
 
-  // Check bash
-  if (access("/bin/bash", F_OK) == 0 || access("/usr/bin/bash", F_OK) == 0) {
+  // Check bash by looking for ~/.bashrc config file
+  char bashrc[PATH_MAX];
+  snprintf(bashrc, sizeof(bashrc), "%s/.bashrc", home);
+  if (access(bashrc, F_OK) == 0) {
     printf("✓ bash found\n");
-    char bashrc[PATH_MAX];
-    snprintf(bashrc, sizeof(bashrc), "%s/.bashrc", home);
     char cmd[PATH_MAX * 4];
     // Check if completions already exist, only append if not present
     snprintf(cmd, sizeof(cmd), "grep -q '_await' '%s' 2>/dev/null || '%s' --autocomplete-bash >> '%s' 2>/dev/null", bashrc, binary_path, bashrc);
@@ -216,11 +216,11 @@ void install_autocompletions() {
     printf("✗ bash not found\n");
   }
 
-  // Check zsh
-  if (access("/bin/zsh", F_OK) == 0 || access("/usr/bin/zsh", F_OK) == 0) {
+  // Check zsh by looking for ~/.zshrc config file
+  char zshrc[PATH_MAX];
+  snprintf(zshrc, sizeof(zshrc), "%s/.zshrc", home);
+  if (access(zshrc, F_OK) == 0) {
     printf("✓ zsh found\n");
-    char zshrc[PATH_MAX];
-    snprintf(zshrc, sizeof(zshrc), "%s/.zshrc", home);
     char cmd[PATH_MAX * 4];
     // Check if completions already exist, only append if not present
     snprintf(cmd, sizeof(cmd), "grep -q '_await' '%s' 2>/dev/null || '%s' --autocomplete-zsh >> '%s' 2>/dev/null", zshrc, binary_path, zshrc);
@@ -234,8 +234,10 @@ void install_autocompletions() {
     printf("✗ zsh not found\n");
   }
 
-  // Check fish
-  if (access("/bin/fish", F_OK) == 0 || access("/usr/bin/fish", F_OK) == 0) {
+  // Check fish by looking for ~/.config/fish/config.fish
+  char fish_config[PATH_MAX];
+  snprintf(fish_config, sizeof(fish_config), "%s/.config/fish/config.fish", home);
+  if (access(fish_config, F_OK) == 0) {
     printf("✓ fish found\n");
     char fish_dir[PATH_MAX];
     snprintf(fish_dir, sizeof(fish_dir), "%s/.config/fish/completions", home);
