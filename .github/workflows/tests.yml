@@ -1,0 +1,42 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        python-version:
+          - "3.8"
+          - "3.11"
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Build await binary
+      run: |
+        cmake -B build/
+        cmake --build build/
+
+    - name: Install test dependencies
+      working-directory: tests
+      run: |
+        pip install -e .
+        pip install pytest pytest-timeout
+
+    - name: Run tests
+      working-directory: tests
+      run: |
+        pytest test_await.py -v
