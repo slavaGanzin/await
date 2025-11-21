@@ -6,3 +6,4 @@ await
 .aider*
 .env
 tests/__pycache__
+build/
