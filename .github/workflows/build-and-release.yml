@@ -125,6 +125,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
+      with:
+        fetch-depth: 0  # Fetch all history and tags for release notes generation
 
     - name: Build await to get version
       run: |
@@ -137,6 +139,43 @@ jobs:
         VERSION=$(./build/await --version)
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "Version: $VERSION"
+
+    - name: Generate Release Notes
+      id: release_notes
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION=${{ steps.get_version.outputs.VERSION }}
+
+        # Get all tags sorted by version
+        PREV_TAG=$(git tag -l --sort=-v:refname | grep -v "^${VERSION}$" | head -n1)
+
+        if [ -z "$PREV_TAG" ]; then
+          echo "No previous tag found, using initial commit"
+          PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+        fi
+
+        echo "Generating release notes from $PREV_TAG to $VERSION"
+
+        # Generate release notes from commits
+        RELEASE_NOTES="## Release $VERSION"
+        RELEASE_NOTES="${RELEASE_NOTES}\n\n### Changes since ${PREV_TAG}\n"
+
+        # Get commit messages, excluding merge commits and version bumps
+        COMMITS=$(git log ${PREV_TAG}..HEAD --oneline --no-merges --pretty=format:"- %s" | grep -v "^- Bump version")
+
+        if [ -z "$COMMITS" ]; then
+          RELEASE_NOTES="${RELEASE_NOTES}\n- Minor updates and improvements"
+        else
+          RELEASE_NOTES="${RELEASE_NOTES}\n${COMMITS}"
+        fi
+
+        # Save to file for multi-line handling
+        echo -e "$RELEASE_NOTES" > release_notes.md
+
+        # Also output for logging
+        echo "Release notes:"
+        cat release_notes.md
 
     - name: Check if Release Exists
       id: check_release
@@ -152,7 +191,7 @@ jobs:
       with:
         tag_name: ${{ steps.get_version.outputs.VERSION }}
         release_name: ${{ steps.get_version.outputs.VERSION }}
-        body: Release version ${{ steps.get_version.outputs.VERSION }}
+        body_path: release_notes.md
         draft: false
         prerelease: false
 
@@ -178,5 +217,6 @@ jobs:
       with:
         files: archives/*
         tag_name: ${{ steps.get_version.outputs.VERSION }}
+        body_path: release_notes.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
