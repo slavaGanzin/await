@@ -10,3 +10,14 @@ tests/*.egg-info
 tests/.pytest_cache
 .pytest_cache
 build/
+
+# CMake build artifacts
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+
+# Generated autocompletion files
+await.bash
+await.fish
+await.zsh
