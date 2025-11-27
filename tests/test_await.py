@@ -202,15 +202,17 @@ class TestOutputModes:
     
     def test_stdout_flag(self):
         """Test --stdout flag shows command output."""
-        # Use -fVo (fail + silent + stdout) to get clean output 
+        # Use -fVo (fail + silent + stdout) to get clean output
+        # Adding sleep before false to ensure output is flushed (helps on macOS)
         returncode, stdout, stderr = run_await_with_timeout(
-            '-fVo "echo \'test_output\'; false"',
+            '-fVo "echo test_output; sleep 0.2; false"',
+            timeout=5.0,
             description="Should show 'test_output' in stdout and exit when command fails with -f flag"
         )
         assert returncode == 0  # Should exit successfully when command fails with -f
         # Clean ANSI codes and check for our output
         clean_stdout = strip_ansi_escape_codes(stdout)
-        assert "test_output" in clean_stdout
+        assert "test_output" in clean_stdout, f"Expected 'test_output' in stdout, got: {repr(clean_stdout)}"
     
     def test_silent_flag(self):
         """Test --silent flag suppresses spinners."""
