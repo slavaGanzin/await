@@ -8,7 +8,13 @@ import os
 import signal
 import re
 import platform
+import tempfile
 from typing import Tuple, Optional
+
+
+# Get the appropriate temp directory for the environment
+# This works in both regular Linux and Nix sandboxed builds
+TMPDIR = os.environ.get('TMPDIR', tempfile.gettempdir())
 
 
 def run_await_with_timeout(
@@ -263,7 +269,7 @@ class TestFlagCombinations:
     def test_change_flag(self):
         """Test --change flag waits for output changes."""
         # Create a temporary file that we'll modify
-        test_file = "/tmp/await_test_change"
+        test_file = os.path.join(TMPDIR, "await_test_change")
         with open(test_file, "w") as f:
             f.write("initial")
         
@@ -372,41 +378,41 @@ class TestDiffMode:
     def test_diff_mode_with_changing_output(self):
         """Test diff highlighting with changing counter output."""
         # Create a script that outputs incrementing counter
-        script_content = """#!/bin/bash
-if [ ! -f /tmp/counter ]; then
-    echo 0 > /tmp/counter
+        counter_file = os.path.join(TMPDIR, "counter")
+        script_path = os.path.join(TMPDIR, "test_counter.sh")
+        script_content = f"""#!/bin/bash
+if [ ! -f {counter_file} ]; then
+    echo 0 > {counter_file}
 fi
-count=$(cat /tmp/counter)
-echo "{\\"counter\\": $count}"
-echo $((count + 1)) > /tmp/counter
+count=$(cat {counter_file})
+echo "{{\\"counter\\": $count}}"
+echo $((count + 1)) > {counter_file}
 """
-        with open("/tmp/test_counter.sh", "w") as f:
+        with open(script_path, "w") as f:
             f.write(script_content)
         
         try:
             # Make script executable
-            import os
-            os.chmod("/tmp/test_counter.sh", 0o755)
-            
+            os.chmod(script_path, 0o755)
+
             # Initialize counter
-            with open("/tmp/counter", "w") as f:
+            with open(counter_file, "w") as f:
                 f.write("100")
-            
+
             # Test with diff mode - should exit after a few iterations showing differences
             returncode, stdout, stderr = run_await_with_timeout(
-                '--diff -fVo "/tmp/test_counter.sh; false"',
+                f'--diff -fVo "{script_path}; false"',
                 timeout=3.0,
                 description="Should highlight changing numbers in JSON output"
             )
-            
+
             assert returncode == 0
             # Should contain highlighted differences (ANSI escape codes for highlighting)
             assert "\033[32m" in stdout  # Green text highlighting
-            
+
         finally:
             # Clean up
-            import os
-            for f in ["/tmp/test_counter.sh", "/tmp/counter"]:
+            for f in [script_path, counter_file]:
                 if os.path.exists(f):
                     os.remove(f)
     
@@ -489,7 +495,7 @@ class TestPlaceholderSubstitution:
         # Note: Placeholder substitution in --exec is documented but has limitations
         # in practice because exec runs when conditions are met, which may be before
         # placeholders are populated. This test verifies --exec works in general.
-        test_file = "/tmp/await_placeholder_exec_test"
+        test_file = os.path.join(TMPDIR, "await_placeholder_exec_test")
         if os.path.exists(test_file):
             os.remove(test_file)
 
@@ -553,7 +559,7 @@ class TestExecFlag:
 
     def test_exec_runs_on_success(self):
         """Test --exec command runs when conditions are met."""
-        test_file = "/tmp/await_exec_test"
+        test_file = os.path.join(TMPDIR, "await_exec_test")
         if os.path.exists(test_file):
             os.remove(test_file)
 
@@ -576,7 +582,7 @@ class TestExecFlag:
 
     def test_exec_not_run_on_timeout(self):
         """Test --exec doesn't run when conditions aren't met."""
-        test_file = "/tmp/await_exec_fail_test"
+        test_file = os.path.join(TMPDIR, "await_exec_fail_test")
         if os.path.exists(test_file):
             os.remove(test_file)
 
@@ -600,7 +606,7 @@ class TestExecFlag:
 
     def test_exec_with_fail_flag(self):
         """Test --exec runs with --fail when command fails."""
-        test_file = "/tmp/await_exec_fail_flag_test"
+        test_file = os.path.join(TMPDIR, "await_exec_fail_flag_test")
         if os.path.exists(test_file):
             os.remove(test_file)
 
@@ -723,15 +729,16 @@ class TestAdvancedFeatures:
     def test_rapid_output_changes(self):
         """Test rapid output changes with --change flag."""
         # Create a script that changes output rapidly
-        script_path = "/tmp/rapid_change_test.sh"
+        script_path = os.path.join(TMPDIR, "rapid_change_test.sh")
+        counter_file = os.path.join(TMPDIR, "rapid_counter")
         with open(script_path, "w") as f:
-            f.write("""#!/bin/bash
-if [ ! -f /tmp/rapid_counter ]; then
-    echo 0 > /tmp/rapid_counter
+            f.write(f"""#!/bin/bash
+if [ ! -f {counter_file} ]; then
+    echo 0 > {counter_file}
 fi
-count=$(cat /tmp/rapid_counter)
+count=$(cat {counter_file})
 echo "Count: $count"
-echo $((count + 1)) > /tmp/rapid_counter
+echo $((count + 1)) > {counter_file}
 if [ $count -ge 3 ]; then
     exit 0
 fi
@@ -742,7 +749,7 @@ exit 1
             os.chmod(script_path, 0o755)
 
             # Initialize counter
-            with open("/tmp/rapid_counter", "w") as f:
+            with open(counter_file, "w") as f:
                 f.write("0")
 
             returncode, stdout, stderr = run_await_with_timeout(
@@ -756,28 +763,29 @@ exit 1
         finally:
             if os.path.exists(script_path):
                 os.remove(script_path)
-            if os.path.exists("/tmp/rapid_counter"):
-                os.remove("/tmp/rapid_counter")
+            if os.path.exists(counter_file):
+                os.remove(counter_file)
 
     def test_diff_with_unicode(self):
         """Test diff mode with unicode characters."""
         # Create a script with unicode output
-        script_path = "/tmp/unicode_test.sh"
+        script_path = os.path.join(TMPDIR, "unicode_test.sh")
+        counter_file = os.path.join(TMPDIR, "unicode_counter")
         with open(script_path, "w") as f:
-            f.write("""#!/bin/bash
-if [ ! -f /tmp/unicode_counter ]; then
-    echo 0 > /tmp/unicode_counter
+            f.write(f"""#!/bin/bash
+if [ ! -f {counter_file} ]; then
+    echo 0 > {counter_file}
 fi
-count=$(cat /tmp/unicode_counter)
+count=$(cat {counter_file})
 echo "Status: 🎯 Count: $count"
-echo $((count + 1)) > /tmp/unicode_counter
+echo $((count + 1)) > {counter_file}
 """)
 
         try:
             os.chmod(script_path, 0o755)
 
             # Initialize counter
-            with open("/tmp/unicode_counter", "w") as f:
+            with open(counter_file, "w") as f:
                 f.write("5")
 
             returncode, stdout, stderr = run_await_with_timeout(
@@ -792,8 +800,8 @@ echo $((count + 1)) > /tmp/unicode_counter
         finally:
             if os.path.exists(script_path):
                 os.remove(script_path)
-            if os.path.exists("/tmp/unicode_counter"):
-                os.remove("/tmp/unicode_counter")
+            if os.path.exists(counter_file):
+                os.remove(counter_file)
 
     def test_forever_flag_with_any(self):
         """Test --forever flag prevents exit."""
