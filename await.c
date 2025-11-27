@@ -903,6 +903,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
             return 0;
           }
+          msleep(10);  // Sleep 10ms to allow exec thread to run
         }
       }
     }
