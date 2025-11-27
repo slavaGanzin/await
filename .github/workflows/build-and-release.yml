@@ -12,9 +12,13 @@ jobs:
 
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@main
+      with:
+        extra-conf: |
+          sandbox = true
+          filter-syscalls = false
 
     - name: Build with Nix
-      run: nix-build
+      run: nix-build --show-trace
 
     - name: Test Nix binary
       run: |
