@@ -7,6 +7,8 @@
 
 **Platform support:** Linux and macOS only
 
+> By the way, it's not written in Rust.
+
 ### install
 ```bash
 # recommended way (crossplatform)
@@ -183,7 +185,7 @@ EXAMPLES:
   await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock
 
 # daily checking if I am on french reviera. Just in case
-  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400
+  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval --timeout 86400
 
 # Yet another server monitor
   await "curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'" --forever --change\
@@ -191,7 +193,7 @@ EXAMPLES:
 
 # waiting for new iPhone in daemon mode
   await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
- --change --interval 86400 --daemon --exec "ntfy send \1"
+ --change --interval --timeout 86400 --daemon --exec "ntfy send \1"
 
 
 OPTIONS:
@@ -206,7 +208,8 @@ OPTIONS:
   --change -c		#waiting for stdout to change and ignore status codes
   --diff -d		#highlight differences between previous and current output (like watch -d)
   --exec -e		#run some shell command on success;
-  --interval -i		#milliseconds between one round of commands [default: 200]
+  --interval --timeout -i		#milliseconds between one round of commands [default: 200]
+  --timeout -t		#milliseconds to wait before giving up [default: 0 (no timeout)]
   --forever -F		#do not exit ever
   --service -S		#create systemd user service with same parameters and activate it
   --version -v		#print the version of await

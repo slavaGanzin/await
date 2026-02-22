@@ -13,6 +13,8 @@ $(du -h build/await | sed -E 's/\s?(.*)\s.*/\1/'), small memory footprint, singl
 
 **Platform support:** Linux and macOS only
 
+> By the way, it's not written in Rust.
+
 ### install
 \`\`\`bash
 # recommended way (crossplatform)

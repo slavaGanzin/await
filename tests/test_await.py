@@ -320,9 +320,134 @@ class TestFlagCombinations:
         assert end_time - start_time < 2.0
 
 
+class TestTimeoutFlag:
+    """Test --timeout / -t flag functionality."""
+
+    def test_timeout_flag_in_help(self):
+        """Test that --timeout flag appears in help."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            "--help",
+            description="Should show timeout flag in help text"
+        )
+        assert returncode == 0
+        assert "--timeout -t" in stdout
+        assert "milliseconds to wait before giving up" in stdout
+
+    def test_timeout_with_failing_command(self):
+        """Test timeout exits after specified time with failing command."""
+        start_time = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--timeout 2000 --silent "false"',
+            timeout=5.0,
+            description="Should timeout after 2 seconds"
+        )
+        end_time = time.time()
+
+        # Should exit with error code (timeout)
+        assert returncode == 1
+        # Should have taken approximately 2 seconds (allow some margin)
+        elapsed = end_time - start_time
+        assert 1.5 < elapsed < 3.0, f"Expected ~2s timeout, got {elapsed:.2f}s"
+
+    def test_timeout_with_successful_command(self):
+        """Test timeout doesn't exit early if command succeeds quickly."""
+        start_time = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--timeout 5000 --silent "true"',
+            timeout=3.0,
+            description="Should exit immediately when command succeeds, not wait for timeout"
+        )
+        end_time = time.time()
+
+        # Should exit successfully
+        assert returncode == 0
+        # Should complete quickly, not wait for timeout
+        elapsed = end_time - start_time
+        assert elapsed < 2.0, f"Expected quick completion, got {elapsed:.2f}s"
+
+    def test_timeout_message(self):
+        """Test timeout shows appropriate message."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--timeout 1000 "false"',
+            timeout=3.0,
+            description="Should show timeout message after 1 second"
+        )
+
+        # Should exit with error code
+        assert returncode == 1
+        # Should contain timeout message in stderr
+        clean_stderr = strip_ansi_escape_codes(stderr)
+        assert "Timeout reached" in clean_stderr
+        assert "ms" in clean_stderr
+
+    def test_timeout_with_silent_flag(self):
+        """Test timeout with --silent suppresses timeout message."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--timeout 1000 --silent "false"',
+            timeout=3.0,
+            description="Should timeout silently without message"
+        )
+
+        # Should exit with error code
+        assert returncode == 1
+        # Should NOT contain timeout message in stderr when silent
+        clean_stderr = strip_ansi_escape_codes(stderr)
+        assert "Timeout reached" not in clean_stderr
+
+    def test_timeout_short_flag(self):
+        """Test -t short flag works."""
+        start_time = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-t 1500 --silent "false"',
+            timeout=3.0,
+            description="Should timeout after 1.5 seconds with -t flag"
+        )
+        end_time = time.time()
+
+        assert returncode == 1
+        elapsed = end_time - start_time
+        assert 1.0 < elapsed < 2.5, f"Expected ~1.5s timeout, got {elapsed:.2f}s"
+
+    def test_timeout_with_change_flag(self):
+        """Test timeout works with --change flag."""
+        # Create a file that never changes
+        test_file = os.path.join(TMPDIR, "await_timeout_change_test")
+        with open(test_file, "w") as f:
+            f.write("static")
+
+        try:
+            start_time = time.time()
+            returncode, stdout, stderr = run_await_with_timeout(
+                f'--timeout 1500 --change --silent "cat {test_file}"',
+                timeout=3.0,
+                description="Should exit on first read (change from empty to content)"
+            )
+            end_time = time.time()
+
+            # With --change, first read succeeds (change from nothing to content)
+            assert returncode == 0
+            elapsed = end_time - start_time
+            # Should complete quickly on first read
+            assert elapsed < 2.0, f"Expected quick completion, got {elapsed:.2f}s"
+        finally:
+            if os.path.exists(test_file):
+                os.remove(test_file)
+
+    def test_timeout_zero_means_no_timeout(self):
+        """Test timeout=0 (default) means no timeout."""
+        # This command would normally run forever, but we'll give it a subprocess timeout
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--timeout 0 --silent "false"',
+            timeout=2.0,
+            description="Should run without timeout limit (subprocess timeout will stop it)"
+        )
+        # Should be killed by subprocess timeout (124), not await timeout (1)
+        assert returncode == 124
+
+
 class TestEdgeCases:
     """Test edge cases and error conditions."""
-    
+
     def test_nonexistent_command(self):
         """Test behavior with non-existent command."""
         returncode, stdout, stderr = run_await_with_timeout(

@@ -12,6 +12,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <time.h>
+#include <sys/time.h>
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -34,6 +36,8 @@ COMMAND exec;
 typedef struct {
   int expectedStatus;
   int interval;
+  int timeout;
+  long start_time;
   int any;
   int change;
   int silent;
@@ -49,7 +53,7 @@ typedef struct {
   int no_stderr;
 } ARGS;
 
-ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args=""};
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0};
 
 int const BUF_SIZE = 1024;
 int const CHUNK_SIZE = BUF_SIZE * 100;
@@ -97,7 +101,7 @@ void print_autocomplete_fish() {
          "    set -l cmd (commandline -opc)\n"
          "    for i in $cmd\n"
          "        switch $i\n"
-         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --watch\n"
+         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --forever --service --watch\n"
          "                return 1\n"
          "        end\n"
          "    end\n"
@@ -130,10 +134,10 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --version --no-stderr --watch\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --forever --service --version --no-stderr --watch\"\n"
          "\n"
          "    case \"${prev}\" in\n"
-         "        --status|--exec|--interval)\n"
+         "        --status|--exec|--interval --timeout)\n"
          "            COMPREPLY=($(compgen -f -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
@@ -170,7 +174,7 @@ void print_autocomplete_zsh() {
          "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
          "    '--diff[Highlight differences between previous and current output]' \\\n"
          "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
-         "    '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
+         "    '--interval --timeout[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]'\n"
@@ -317,6 +321,12 @@ int msleep(long msec)
     return res;
 }
 
+long current_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+}
+
 char * replace_placeholders(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
     if (!c[i].previousOut) continue;
@@ -421,11 +431,11 @@ void help() {
   "# lazy version\n"
   "  await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock\n\n"
   "# daily checking if I am on french reviera. Just in case\n"
-  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
+  "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval --timeout 86400\n\n"
   "# Yet another server monitor\n"
   "  await \"curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'\" --forever --change\\\n    --exec \"ntfy send \\'whatnot.ai \\1\\'\"\n\n"
   "# waiting for new iPhone in daemon mode\n"
-  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --change --interval 86400 --daemon --exec \"ntfy send \\1\"\n\n"
+  "  await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12'\\\n --change --interval --timeout 86400 --daemon --exec \"ntfy send \\1\"\n\n"
   "\nOPTIONS:\n"
   "  --help\t\t#print this help\n"
   "  --stdout -o\t\t#print stdout of commands\n"
@@ -438,7 +448,8 @@ void help() {
   "  --change -c\t\t#waiting for stdout to change and ignore status codes\n"
   "  --diff -d\t\t#highlight differences between previous and current output (like watch -d)\n"
   "  --exec -e\t\t#run some shell command on success;\n"
-  "  --interval -i\t\t#milliseconds between one round of commands [default: 200]\n"
+  "  --interval --timeout -i\t\t#milliseconds between one round of commands [default: 200]\n"
+  "  --timeout -t\t\t#milliseconds to wait before giving up [default: 0 (no timeout)]\n"
   "  --forever -F\t\t#do not exit ever\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
@@ -484,6 +495,7 @@ void parse_args(int argc, char *argv[]) {
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
             {"interval",required_argument, 0, 'i'},
+            {"timeout", required_argument, 0, 't'},
             {"no-stderr", no_argument, 0, 'E'},
             {"watch", no_argument, 0, 'w'},
             {"autocompletions", no_argument, 0, 0},
@@ -494,7 +506,7 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:Ew", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:t:Ew", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -540,6 +552,7 @@ void parse_args(int argc, char *argv[]) {
           case 'c': args.change = 1; break;
           case 'S': args.service = optarg; break;
           case 'i': args.interval = atoi(optarg); break;
+          case 't': args.timeout = atoi(optarg); break;
           case 'd': args.diff = 1; break;
           case 'v': printf("2.4.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
@@ -738,7 +751,12 @@ int main(int argc, char *argv[]) {
   static int first_output = 1;
   static char *last_display = NULL;
   static char *last_silent_output = NULL;
-  
+
+  // Initialize start time for timeout
+  if (args.timeout > 0) {
+    args.start_time = current_time_ms();
+  }
+
   while (1) {
     not_done = 0;
     
@@ -907,6 +925,18 @@ int main(int argc, char *argv[]) {
         }
       }
     }
+
+    // Check timeout
+    if (args.timeout > 0) {
+      long elapsed = current_time_ms() - args.start_time;
+      if (elapsed >= args.timeout) {
+        if (!args.silent) {
+          fprintf(stderr, "\n\033[0;31mTimeout reached after %ld ms\033[0m\n", elapsed);
+        }
+        return 1; // Exit with error code
+      }
+    }
+
     msleep(args.interval);
   }
 
