@@ -119,7 +119,7 @@ void print_autocomplete_fish() {
          "complete -c await -n '__fish_await_no_subcommand' -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l diff -s d -d 'Highlight differences between previous and current output'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l exec -s e -d 'Run some shell command on success' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseconds between one round of commands [default: 200]' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Seconds between one round of commands [default: 0.2]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l timeout -s T -d 'Seconds to wait before giving up [default: 0]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l cmd-timeout -s t -d 'Seconds per command before killing it' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l retry -s r -d 'Max number of attempts before giving up [default: 0 (unlimited)]' -r\n"
@@ -179,7 +179,7 @@ void print_autocomplete_zsh() {
          "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
          "    '--diff[Highlight differences between previous and current output]' \\\n"
          "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
-         "    '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
+         "    '--interval[Seconds between rounds of commands (default: 0.2)]::interval' \\\n"
          "    '--timeout[Seconds to wait before giving up (default: 0)]::timeout' \\\n"
          "    '--cmd-timeout[Seconds per command before killing it]::cmd-timeout' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
@@ -455,7 +455,7 @@ void help() {
   "  --change -c\t\t#waiting for stdout to change and ignore status codes\n"
   "  --diff -d\t\t#highlight differences between previous and current output (like watch -d)\n"
   "  --exec -e\t\t#run some shell command on success;\n"
-  "  --interval -i\t\t#milliseconds between one round of commands [default: 200]\n"
+  "  --interval -i\t\t#seconds between one round of commands [default: 0.2]\n"
   "  --timeout -T\t\t#seconds to wait before giving up [default: 0 (no timeout)]\n"
   "  --cmd-timeout -t\t#seconds per command before killing it (wraps with timeout(1))\n"
   "  --retry -r\t\t#max number of attempts before giving up [default: 0 (unlimited)]\n"
@@ -562,12 +562,12 @@ void parse_args(int argc, char *argv[]) {
           case 'F': args.forever = 1; break;
           case 'c': args.change = 1; break;
           case 'S': args.service = optarg; break;
-          case 'i': args.interval = atoi(optarg); break;
+          case 'i': args.interval = atoi(optarg) * 1000; break;
           case 'T': args.timeout = atoi(optarg) * 1000; break;
           case 't': args.cmd_timeout = atoi(optarg); break;
           case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.4.0\n"); exit(0); break;
+          case 'v': printf("2.5.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
