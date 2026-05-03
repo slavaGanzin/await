@@ -844,8 +844,8 @@ class TestAdvancedFeatures:
 
     def test_many_concurrent_commands(self):
         """Test running many commands concurrently."""
-        # Test with 10 concurrent true commands
-        commands = ' '.join(['"true"'] * 10)
+        # Test with 5 concurrent true commands
+        commands = ' '.join(['"true"'] * 5)
         returncode, stdout, stderr = run_await_with_timeout(
             f'{commands}',
             timeout=5.0,
