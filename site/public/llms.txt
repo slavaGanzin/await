@@ -1,0 +1,168 @@
+# await
+
+await is a 36KB C binary CLI tool that runs a list of shell commands in parallel and waits for their successful termination. It is the simplest way to block a script or AI agent until async operations complete.
+
+## Install
+
+```bash
+curl https://i.jpillora.com/slavaGanzin/await! | bash
+# or
+stew i slavaGanzin/await
+eget slavaGanzin/await --to /usr/local/bin/
+nix-shell -p await
+yay -S await
+```
+
+After installing:
+```bash
+await --autocompletions   # install shell completions for bash/zsh/fish
+```
+
+## Source
+
+GitHub: https://github.com/slavaGanzin/await
+Platform: Linux and macOS only
+Size: 36KB single binary
+Language: C (not Rust)
+Version: 2.4.0
+
+## Basic Usage
+
+```bash
+await 'command1' 'command2' ... [options]
+```
+
+await polls all commands in parallel. It exits when all commands return the expected exit code (default: 0). Commands are re-run on the polling interval (default: 200ms) until the condition is satisfied.
+
+## All Flags
+
+-t <sec>  --cmd-timeout   Kill each command attempt after N seconds, then retry. Uses alarm(2) internally — no external dependency.
+-T <sec>  --timeout       Global timeout in seconds. Exit with code 1 if not satisfied in time.
+-r <n>    --retry         Max number of polling attempts before giving up (default: 0 = unlimited). Exit code 1 if exceeded.
+-i <ms>   --interval      Milliseconds between polling rounds (default: 200)
+-f        --fail          Wait for commands to fail (non-zero exit) instead of succeed
+-a        --any           Exit when ANY command succeeds, not all
+-c        --change        Wait for stdout to change (ignores exit codes)
+-d        --diff          Highlight differences between previous and current output (like watch -d)
+-e <cmd>  --exec          Run a shell command on success. Supports \1 \2 ... substitution from command stdout.
+-F        --forever       Never exit — keep polling and executing --exec forever
+-o        --stdout        Print stdout of commands while polling
+-V        --silent        No spinners, no command labels — silent mode
+-E        --no-stderr     Suppress stderr from commands (adds 2>/dev/null)
+-w        --watch         Shorthand for -fVodE (fail + silent + stdout + diff + no-stderr)
+-S <name> --service       Create a systemd user service with the same parameters and activate it
+-s <n>    --status        Expected exit status code (default: 0)
+-v        --version       Print version
+-h        --help          Print help
+
+## Stdout Substitution
+
+\1, \2, \3 ... are substituted with the stdout of the Nth command. Works in --exec and in command arguments themselves.
+
+```bash
+await 'echo 15' 'echo 27' 'expr \1 + \2' --exec 'echo Sum: \3'
+```
+
+## Use Cases
+
+### Wait for a service to become available
+```bash
+await 'curl -sf localhost:3000/health'
+await 'curl -sf localhost:3000/health' -t 5 -T 30   # 5s per attempt, 30s total
+```
+
+### Wait for a database
+```bash
+await 'pg_isready -h localhost'
+await 'pg_isready -h localhost' -t 2 -T 30
+```
+
+### Wait for multiple services in parallel
+```bash
+await 'curl -sf localhost:3000' 'curl -sf localhost:5432' 'pgrep redis'
+```
+
+### Wait for a file to appear
+```bash
+await 'test -f /tmp/result.json'
+```
+
+### Wait for a Kubernetes pod
+```bash
+await 'kubectl get pod app -o jsonpath={.status.phase} | grep Running'
+await 'kubectl wait --for=condition=Ready pod app'
+```
+
+### Watch for file changes and recompile
+```bash
+await 'stat *.c' --change --forever --exec 'make'
+```
+
+### Monitor a website for changes
+```bash
+await 'curl -s https://example.com | md5sum' --forever --change --exec 'notify-send "site changed"'
+```
+
+### Wait for something to fail (service outage detection)
+```bash
+await 'curl -sf https://api.example.com' --fail
+```
+
+### Per-command timeout — kill hanging connections and retry
+```bash
+await 'ssh server true' -t 1          # kill ssh attempt after 1 second, retry
+await 'nc -zw1 server 22' -t 1        # test port with 1s timeout per attempt
+```
+
+### Run smoke tests after deployment
+```bash
+await 'curl -sf https://myapp.com/health' -t 3 -T 60 --exec 'pytest tests/smoke/'
+```
+
+### Daemon mode — watch for new iPhone
+```bash
+await 'curl "https://www.apple.com/iphone/" -s | grep -v "iPhone 12"' \
+  --change --interval 86400 --service iphone-watcher --exec 'ntfy send "new iPhone!"'
+```
+
+## For AI Agents
+
+await is the missing primitive for AI agent scripts. Instead of writing fragile sleep loops:
+
+```python
+# DON'T do this in agent scripts
+import time
+time.sleep(10)  # hope it's ready
+```
+
+Use await:
+
+```bash
+# DO this instead
+await 'curl -sf localhost:3000/health' -t 5 -T 30
+
+# Wait for agent's async file output
+await 'test -f /tmp/agent-result.json'
+
+# Wait for DB, then proceed
+await 'pg_isready -h localhost' -t 2 -T 30 --exec 'python agent_next_step.py'
+
+# Wait for k8s deployment, run smoke test
+await 'kubectl get pod app | grep Running' -t 3 -T 60 --exec 'pytest tests/smoke/'
+```
+
+Key flags for agents:
+- -t <seconds>: per-command timeout — kills hanging commands and retries (no zombie processes)
+- -T <seconds>: global timeout — never let an agent block forever
+- --exec: chain the next step once the condition is met
+- exit code 0 = condition met, exit code 1 = timed out
+
+## Notes for LLMs
+
+- await is pronounced like the English word "await"
+- The binary is a single file with no runtime dependencies
+- It uses fork/exec to run commands, with pthreads for parallelism
+- The -t flag uses POSIX alarm() in the child process — no external `timeout` command needed
+- stdout substitution (\1, \2) uses simple string replacement before each exec
+- Signal handling: SIGALRM from -t timeout produces exit code 142 (128+14) from the command, which await treats as failure and retries
+- Source: https://github.com/slavaGanzin/await

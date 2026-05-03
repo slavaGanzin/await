@@ -1,0 +1,378 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --text:   #f0ede8;
+  --dim:    #a0b098;
+  --line:   rgba(200,200,255,0.1);
+  --amber:  #e8a020;
+  --green:  #4dff9d;
+  --red:    #ff5060;
+}
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: var(--text);
+  background: #000;
+}
+
+/* ── WebGL canvas ────────────────────────────────────────────────────────── */
+#bgCanvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+/* ── Slides container ───────────────────────────────────────────────────── */
+.slides {
+  height: 100vh;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  position: relative;
+  z-index: 1;
+}
+.slides::-webkit-scrollbar { display: none; }
+
+/* ── Single slide ───────────────────────────────────────────────────────── */
+.slide {
+  height: 100vh;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  padding: 0 8vw;
+  gap: 2.5rem;
+  position: relative;
+}
+
+.slide-center {
+  align-items: center;
+  text-align: center;
+}
+
+/* ── Slide entry animations ──────────────────────────────────────────────── */
+[data-anim="fade-up"] {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+[data-anim="fade-in"] {
+  opacity: 0;
+  transition: opacity 0.65s ease;
+}
+[data-anim].anim-done {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── Progress bar ──────────────────────────────────────────────────────────── */
+.slide-progress {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 0%;
+  height: 2px;
+  background: var(--amber);
+  z-index: 200;
+  transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+/* ── Slide counter ──────────────────────────────────────────────────────── */
+.slide-counter {
+  position: fixed;
+  bottom: 1rem;
+  left: 1.5rem;
+  font-size: 0.68rem;
+  color: rgba(255,255,255,0.22);
+  z-index: 100;
+  letter-spacing: 0.1em;
+  pointer-events: none;
+}
+
+/* ── Slide typography ───────────────────────────────────────────────────── */
+.slide-eyebrow {
+  font-size: clamp(0.8rem, 1.2vw, 1rem);
+  color: var(--dim);
+  letter-spacing: 0.18em;
+}
+
+/* Big, bold section label — the slide's identity */
+.slide-label {
+  font-size: clamp(1.8rem, 4vw, 5.5rem);
+  font-weight: 800;
+  color: var(--amber);
+  letter-spacing: -0.01em;
+  line-height: 1;
+  text-shadow: 0 0 60px rgba(0,0,0,0.8);
+  align-self: flex-start;
+}
+
+/* The KEY insight sentence on comparison slides */
+.vs-bridge {
+  font-size: clamp(2rem, 4.5vw, 5.5rem);
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.15;
+  text-shadow: 0 2px 18px rgba(0,0,0,1), 0 0 50px rgba(0,0,0,0.8);
+  align-self: flex-start;
+}
+.vs-bridge em { color: var(--green); font-style: normal; }
+
+/* Supporting caption */
+.slide-caption {
+  font-size: clamp(1.4rem, 3vw, 3.5rem);
+  color: rgba(235, 232, 228, 0.90);
+  line-height: 1.35;
+  text-shadow: 0 2px 18px rgba(0,0,0,1), 0 0 40px rgba(0,0,0,0.9);
+  align-self: flex-start;
+}
+.slide-caption em { color: #fff; font-style: normal; }
+
+/* ── Code blocks — full-width, presentation-scale ────────────────────────── */
+.slide-code {
+  background: rgba(0, 0, 10, 0.82);
+  border: 1px solid rgba(200, 200, 255, 0.08);
+  border-left: 4px solid rgba(200, 200, 255, 0.25);
+  border-radius: 8px;
+  padding: 1.6rem 2.4rem;
+  font-size: clamp(1.1rem, 2.6vw, 3rem);
+  line-height: 1.65;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  overflow-x: auto;
+  white-space: pre;
+  /* stretch to fill slide width */
+  align-self: stretch;
+}
+.slide-code.bad  { border-left-color: rgba(255,80,96,0.5);  opacity: 0.5; text-decoration: line-through; }
+.slide-code.old  { border-left-color: rgba(255,80,96,0.4);  opacity: 0.55; }
+.slide-code.good { border-left-color: rgba(77,255,157,0.6); }
+.slide-code code { font-family: inherit; font-size: inherit; background: none; padding: 0; }
+
+/* ── Hero ────────────────────────────────────────────────────────────────── */
+.slide-hero {
+  align-items: flex-start;
+  gap: 1.5rem;
+}
+
+.hero-title {
+  font-size: clamp(5rem, 16vw, 13rem);
+  font-weight: 800;
+  line-height: 0.88;
+  letter-spacing: -0.04em;
+  color: var(--text);
+}
+
+.blink-cursor {
+  color: var(--amber);
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* ── Hero glass card (only place we use it) ─────────────────────────────── */
+.glass-card {
+  background: rgba(8, 10, 30, 0.58);
+  backdrop-filter: blur(32px) saturate(1.5);
+  -webkit-backdrop-filter: blur(32px) saturate(1.5);
+  border: 1px solid rgba(200, 220, 255, 0.10);
+  border-radius: 18px;
+  padding: clamp(1.5rem, 2.5vw, 2.5rem) clamp(1.8rem, 3vw, 3.2rem);
+  max-width: min(80vw, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 1.8rem;
+}
+
+.hero-tagline {
+  font-size: clamp(1.6rem, 3.2vw, 3rem);
+  color: var(--text);
+  line-height: 1.25;
+  max-width: 20ch;
+}
+
+.hero-row {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.cta-btn {
+  display: inline-block;
+  padding: 0.8rem 2.2rem;
+  background: var(--amber);
+  color: #000;
+  font-family: inherit;
+  font-size: clamp(1rem, 1.4vw, 1.3rem);
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: 0.06em;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.cta-btn:hover { background: #c87810; }
+
+.hero-aside { font-size: clamp(0.85rem, 1.2vw, 1rem); color: var(--dim); }
+
+/* ── Install ─────────────────────────────────────────────────────────────── */
+.install-box {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: rgba(0, 0, 12, 0.85);
+  border: 1px solid rgba(200, 200, 255, 0.12);
+  border-left: 4px solid var(--amber);
+  border-radius: 8px;
+  padding: 1.6rem 2.4rem;
+  align-self: stretch;
+}
+#install-cmd {
+  font-size: clamp(1rem, 2.2vw, 2.5rem);
+  color: var(--green);
+  font-family: 'JetBrains Mono', monospace;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.copy-btn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--amber);
+  font-size: 1.4rem;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+.copy-btn:hover, .copy-btn.copied { background: var(--amber); color: #000; }
+
+.install-alts {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  align-self: flex-start;
+}
+.install-alts code {
+  font-size: clamp(1rem, 1.8vw, 2rem);
+  color: var(--dim);
+}
+
+/* ── Flags table ─────────────────────────────────────────────────────────── */
+.flags-table { border-collapse: collapse; align-self: stretch; }
+.flags-table td {
+  padding: 1rem 2.5rem 1rem 0;
+  font-size: clamp(1rem, 1.8vw, 2rem);
+  border-bottom: 1px solid rgba(200,200,255,0.06);
+  vertical-align: top;
+  line-height: 1.5;
+}
+.flags-table td:first-child {
+  color: var(--amber);
+  white-space: nowrap;
+  font-size: clamp(1.1rem, 2vw, 2.2rem);
+  padding-right: 3rem;
+}
+.flags-table em   { color: var(--red); font-style: normal; }
+.flags-table code { font-family: inherit; font-size: inherit; }
+
+.llms-link {
+  font-size: clamp(1rem, 1.5vw, 1.5rem);
+  color: var(--dim);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(200,200,255,0.15);
+  align-self: flex-start;
+  text-shadow: 0 0 20px rgba(0,0,0,0.8);
+}
+.llms-link:hover { color: var(--amber); }
+
+/* ── Outro ───────────────────────────────────────────────────────────────── */
+.outro-domain {
+  font-size: clamp(4rem, 10vw, 9rem);
+  font-weight: 800;
+  color: var(--amber);
+  letter-spacing: -0.03em;
+  line-height: 1;
+  text-shadow: 0 0 80px rgba(232,160,32,0.4);
+}
+.outro-sub {
+  font-size: clamp(1rem, 2vw, 2rem);
+  color: var(--dim);
+  text-shadow: 0 0 30px rgba(0,0,0,0.7);
+}
+.outro-links { display: flex; gap: 3rem; flex-wrap: wrap; justify-content: center; }
+.outro-links a {
+  font-size: clamp(1.2rem, 2vw, 2rem);
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.outro-links a:hover { color: var(--amber); border-color: var(--amber); }
+
+/* ── Navigation dots ─────────────────────────────────────────────────────── */
+.slide-dots {
+  position: fixed;
+  right: 1.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.slide-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.25s, transform 0.25s;
+}
+.slide-dot.active { background: var(--amber); transform: scale(1.7); }
+.slide-dot:hover  { background: rgba(255,255,255,0.5); }
+
+/* ── Mobile ──────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .slide { padding: 0 5vw; gap: 1.4rem; }
+
+  .slide-code {
+    font-size: clamp(0.85rem, 3.5vw, 1.1rem);
+    padding: 1rem 1.2rem;
+    border-radius: 6px;
+  }
+
+  .slide-label   { font-size: clamp(1.4rem, 6vw, 2.5rem); }
+  .vs-bridge     { font-size: clamp(1.3rem, 5.5vw, 2rem); }
+  .slide-caption { font-size: clamp(1.1rem, 4.5vw, 1.6rem); }
+
+  .hero-title   { font-size: clamp(4rem, 20vw, 7rem); }
+  .hero-tagline { font-size: clamp(1.3rem, 5vw, 2rem); }
+
+  .install-box { padding: 1rem 1.2rem; }
+  #install-cmd { font-size: clamp(0.7rem, 3vw, 1rem); }
+  .install-alts code { font-size: 0.9rem; }
+
+  .flags-table td            { padding: 0.6rem 0.8rem 0.6rem 0; font-size: 0.9rem; }
+  .flags-table td:first-child { font-size: 1rem; padding-right: 1rem; }
+
+  .outro-domain { font-size: clamp(3rem, 16vw, 5.5rem); }
+  .slide-dots   { right: 0.5rem; }
+  .slide-counter { left: 1rem; }
+  .glass-card { max-width: 90vw; }
+}

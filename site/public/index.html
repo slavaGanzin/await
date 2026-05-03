@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>await — your commands, done when you say so</title>
+  <meta name="description" content="await is a 36KB CLI tool that polls shell commands in parallel and waits for them to succeed.">
+  <meta property="og:title" content="await — your commands, done when you say so">
+  <meta property="og:description" content="36KB C binary. Replaces sleep. Replaces watch. One command.">
+  <meta property="og:image" content="/images/og.jpg">
+  <meta property="og:url" content="https://await.beer">
+  <meta property="og:type" content="website">
+  <link rel="alternate" type="text/plain" title="LLMs.txt" href="/llms.txt">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ppt-base.css">
+  <link rel="stylesheet" href="/sharp-mono.css">
+  <link rel="stylesheet" href="/deck.css">
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- ── 01 COVER ────────────────────────────────────────────── -->
+  <section class="slide slide-cover" id="s-cover" data-title="await">
+    <div class="cover-rule" data-anim></div>
+    <div class="cover-eyebrow" data-anim>CLI TOOL &nbsp;·&nbsp; 36KB &nbsp;·&nbsp; BREWED IN C &nbsp;·&nbsp; LINUX &amp; MACOS</div>
+    <h1 class="cover-title" data-anim>await</h1>
+    <p class="cover-tagline" data-anim>waits for your commands to <em>succeed.</em></p>
+    <div class="cover-install" data-anim>
+      <code id="install-cmd">curl https://i.jpillora.com/slavaGanzin/await! | bash</code>
+      <button onclick="copyInstall()" id="copy-btn">copy</button>
+    </div>
+    <div class="cover-meta" data-anim>
+      <span>cold &nbsp;·&nbsp; not written in Rust.</span>
+      <span>
+        <a href="https://github.com/slavaGanzin/await" target="_blank">GitHub →</a>
+        &nbsp;&nbsp;
+        <a href="/llms.txt" target="_blank">llms.txt →</a>
+      </span>
+    </div>
+    <div class="notes">Cover slide. The main pitch: await waits for conditions. 36KB C binary. No deps.</div>
+  </section>
+
+  <!-- ── 02 THE OLD WAY ───────────────────────────────────────── -->
+  <section class="slide" id="s-old" data-title="The Old Way">
+    <div class="slide-label" data-anim><span class="num">before</span> the old way</div>
+    <div class="compare-grid" data-anim>
+      <div>
+        <div class="compare-label">what everyone does</div>
+        <pre class="code-block bad"><code>sleep 5
+connect-to-service</code></pre>
+        <div class="compare-note">hope 5 seconds was enough.<br>usually isn't. sometimes is 30s.</div>
+      </div>
+      <div class="compare-arrow">→</div>
+      <div>
+        <div class="compare-label">what you actually want</div>
+        <pre class="code-block good"><code>await 'curl -sf localhost:3000/health'
+connect-to-service</code></pre>
+        <div class="compare-note">waits until it <em>actually</em> works.<br>then proceeds. deterministic.</div>
+      </div>
+    </div>
+    <div class="notes">The core value prop. sleep is guessing. await is knowing.</div>
+  </section>
+
+  <!-- ── 03 UC: EC2 SSH ───────────────────────────────────────── -->
+  <section class="slide" id="s-uc1" data-title="EC2 SSH">
+    <div class="slide-label" data-anim><span class="num">01</span> ec2 just booted</div>
+    <div class="uc-grid">
+      <div class="terminal-window" data-anim>
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">await — ec2 ssh</span>
+        </div>
+        <video autoplay muted loop playsinline>
+          <source src="/uc-01-ec2-ssh.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="uc-annotation" data-anim>
+        <h2>SSH keeps saying<br>Connection refused.</h2>
+        <p class="context">EC2 takes 30–90s to accept SSH after provisioning.<br>You don't know when. await knows when.</p>
+        <div class="uc-cmd">
+          await <span class="ann" data-tip="the condition: test if SSH port is open">'test -f /tmp/.ec2-ready'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="kill the check after 3s if it hangs — no 60s TCP timeouts">--cmd-timeout 3</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="run once: open the actual SSH session">--exec 'ssh ubuntu@prod'</span>
+        </div>
+        <div class="insight">SSH ready check + auto-connect in one line. No polling loops.</div>
+      </div>
+    </div>
+    <div class="notes">Classic devops use case. EC2 provisioning latency is unpredictable. await solves it cleanly.</div>
+  </section>
+
+  <!-- ── 04 UC: K8s pod ───────────────────────────────────────── -->
+  <section class="slide" id="s-uc2" data-title="K8s Pod">
+    <div class="slide-label" data-anim><span class="num">02</span> k8s pod is pending</div>
+    <div class="uc-grid">
+      <div class="terminal-window" data-anim>
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">await — k8s pod</span>
+        </div>
+        <video autoplay muted loop playsinline>
+          <source src="/uc-02-k8s-pod.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="uc-annotation" data-anim>
+        <h2>Need to port-forward<br>once it's Running.</h2>
+        <p class="context">Pods go Pending → ContainerCreating → Running.<br>You need the right state, not just "it started."</p>
+        <div class="uc-cmd">
+          await \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="any command piped into grep works as a condition">'kubectl get pod app ... | grep Running'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="120s global deadline — give up if pod never comes up">--timeout 120</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="once Running: open the port-forward">--exec 'kubectl port-forward pod/app 8080:80'</span>
+        </div>
+        <div class="insight">Pipe any command through grep — if grep exits 0, condition is met.</div>
+      </div>
+    </div>
+    <div class="notes">kubectl + grep pattern. Idiomatic — any command that exits 0 is a valid condition.</div>
+  </section>
+
+  <!-- ── 05 UC: Docker stack ──────────────────────────────────── -->
+  <section class="slide" id="s-uc3" data-title="Docker Stack">
+    <div class="slide-label" data-anim><span class="num">03</span> docker stack starting</div>
+    <div class="uc-grid">
+      <div class="terminal-window" data-anim>
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">await — docker stack</span>
+        </div>
+        <video autoplay muted loop playsinline>
+          <source src="/uc-03-docker-stack.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="uc-annotation" data-anim>
+        <h2>postgres + redis.<br>nothing is ready yet.</h2>
+        <p class="context">Multiple services, each with its own startup time.<br>ALL must be healthy before running migrations.</p>
+        <div class="uc-cmd">
+          await \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="condition 1 of 2: postgres health check">'pg_isready -h localhost'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="condition 2 of 2: both must pass simultaneously">'redis-cli ping'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="run once both services respond">--exec 'python manage.py migrate &amp;&amp; runserver'</span>
+        </div>
+        <div class="insight">Multiple conditions are polled in parallel. ALL must succeed before exec runs.</div>
+      </div>
+    </div>
+    <div class="notes">Multi-service readiness. N conditions checked in parallel. Clean dependency management.</div>
+  </section>
+
+  <!-- ── 06 UC: CI merge ──────────────────────────────────────── -->
+  <section class="slide" id="s-uc4" data-title="CI Merge">
+    <div class="slide-label" data-anim><span class="num">04</span> ci is running</div>
+    <div class="uc-grid">
+      <div class="terminal-window" data-anim>
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">await — ci merge</span>
+        </div>
+        <video autoplay muted loop playsinline>
+          <source src="/uc-04-ci-merge.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="uc-annotation" data-anim>
+        <h2>Pushed at 6pm.<br>CI takes 20 min.</h2>
+        <p class="context">Close the laptop. await babysits CI for you.<br>Merges automatically when green.</p>
+        <div class="uc-cmd">
+          await <span class="ann" data-tip="gh exits 0 when run is successful, 1 while in-progress">'gh run view --exit-status'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="kill stalled gh check after 10s">--cmd-timeout 10</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="5 min total — give up if CI hangs">--timeout 300</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="auto-merge once CI is green">--exec 'gh pr merge --auto --squash'</span>
+        </div>
+        <div class="insight">Never babysit CI again. Close the laptop, get the merge.</div>
+      </div>
+    </div>
+    <div class="notes">The CI gating pattern. Huge time saver. Works with any CI tool that has an exit-code CLI.</div>
+  </section>
+
+  <!-- ── 07 UC: Deploy smoke ──────────────────────────────────── -->
+  <section class="slide" id="s-uc5" data-title="Deploy Smoke">
+    <div class="slide-label" data-anim><span class="num">05</span> deployed to staging</div>
+    <div class="uc-grid">
+      <div class="terminal-window" data-anim>
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">await — deploy smoke</span>
+        </div>
+        <video autoplay muted loop playsinline>
+          <source src="/uc-05-deploy-smoke.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="uc-annotation" data-anim>
+        <h2>Takes 2 min to<br>propagate. Don't sleep 120.</h2>
+        <p class="context">New deploy needs time to boot.<br>Run smoke tests only once health check passes.</p>
+        <div class="uc-cmd">
+          await <span class="ann" data-tip="wait for health endpoint — no guessing propagation time">'curl -sf staging.myapp.com/health'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="kill hanging curl after 5s">--cmd-timeout 5</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="2 min max — fail the pipeline if staging never comes up">--timeout 120</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="run smoke suite once deploy is live">--exec 'pytest tests/smoke/ -x'</span>
+        </div>
+        <div class="insight">Health-gated smoke tests. No fixed sleeps in your deploy pipeline.</div>
+      </div>
+    </div>
+    <div class="notes">CI/CD pipeline pattern. sleep 120 is common and terrible. await is better.</div>
+  </section>
+
+  <!-- ── 08 UC: Site monitor ──────────────────────────────────── -->
+  <section class="slide" id="s-uc6" data-title="Site Monitor">
+    <div class="slide-label" data-anim><span class="num">06</span> set it and forget it</div>
+    <div class="uc-grid">
+      <div class="terminal-window" data-anim>
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-title">await — site monitor</span>
+        </div>
+        <video autoplay muted loop playsinline>
+          <source src="/uc-06-site-monitor.mp4" type="video/mp4">
+        </video>
+      </div>
+      <div class="uc-annotation" data-anim>
+        <h2>Your site goes down<br>at 3am.</h2>
+        <p class="context">A monitor in a single tmux pane.<br>Fires the moment your site stops responding.</p>
+        <div class="uc-cmd">
+          await <span class="ann" data-tip="checks if site returns 2xx — exits 0 when it does">'curl -sf https://myapp.com'</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="never stop — keep watching after exec fires">--forever</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="invert: wait for curl to FAIL (site goes down)">--fail</span> \<br>
+          &nbsp;&nbsp;<span class="ann" data-tip="send push notification when site dies">--exec 'ntfy send "site is down"'</span>
+        </div>
+        <div class="insight">--forever restarts after exec. --fail inverts the condition. One line uptime monitor.</div>
+      </div>
+    </div>
+    <div class="notes">--fail is the inversion flag. --forever makes it run continuously. Together: poor man's alerting.</div>
+  </section>
+
+  <!-- ── 09 CAROUSEL ──────────────────────────────────────────── -->
+  <section class="slide carousel-slide" id="s-carousel" data-title="20 Use Cases">
+    <div class="carousel-header">
+      <div class="slide-label" data-anim><span class="num">∞</span> if it exits 0, await can wait for it</div>
+      <div style="display:flex;align-items:baseline;gap:16px;" data-anim>
+        <h2 class="carousel-title">every command you know.<br><em>made conditional.</em></h2>
+        <div class="carousel-nav">
+          <button onclick="carouselPrev()" aria-label="prev">←</button>
+          <span class="carousel-counter" id="carousel-counter">1 / 20</span>
+          <button onclick="carouselNext()" aria-label="next">→</button>
+        </div>
+      </div>
+    </div>
+    <div class="carousel-track-wrapper" data-anim>
+      <div class="carousel-track" id="carousel-track">
+
+        <!-- 01 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">01</div>
+          <div class="carousel-card-title">Wait for dev server</div>
+          <div class="carousel-card-cmd">await 'curl -sf <span class="flag" title="any HTTP check">localhost:3000/health</span>'</div>
+          <div class="carousel-card-tip">Zero sleep timers. Condition-driven startup.</div>
+        </div>
+
+        <!-- 02 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">02</div>
+          <div class="carousel-card-title">Run migrations after DB</div>
+          <div class="carousel-card-cmd">await 'pg_isready -h localhost' \<br><span class="flag" title="--cmd-timeout: kill if check hangs">--cmd-timeout 2</span> \<br>--exec 'npm run migrate'</div>
+          <div class="carousel-card-tip">--cmd-timeout prevents a hung pg_isready from blocking forever.</div>
+        </div>
+
+        <!-- 03 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">03</div>
+          <div class="carousel-card-title">Multi-service startup</div>
+          <div class="carousel-card-cmd">await \<br>'pg_isready' \<br>'redis-cli ping' \<br>'curl -sf localhost:9200'</div>
+          <div class="carousel-card-tip">All conditions checked in parallel. ALL must succeed.</div>
+        </div>
+
+        <!-- 04 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">04</div>
+          <div class="carousel-card-title">EC2 SSH ready</div>
+          <div class="carousel-card-cmd">await 'nc -z ec2-ip 22' \<br><span class="flag" title="nc -z: fastest port check, no session overhead">--cmd-timeout 3</span> \<br>--exec 'ssh ubuntu@ec2'</div>
+          <div class="carousel-card-tip">nc -z is the fastest way to test port availability.</div>
+        </div>
+
+        <!-- 05 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">05</div>
+          <div class="carousel-card-title">K8s pod running</div>
+          <div class="carousel-card-cmd">await '<span class="flag" title="pipe any command into grep for condition">kubectl get pod app \<br>-o jsonpath=... \<br>| grep Running</span>' \<br>--exec 'kubectl port-forward ...'</div>
+          <div class="carousel-card-tip">Pipe into grep — if grep exits 0, condition met.</div>
+        </div>
+
+        <!-- 06 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">06</div>
+          <div class="carousel-card-title">Container healthy</div>
+          <div class="carousel-card-cmd">await 'docker inspect app \<br>| jq -e .[].State.<br>Health.Status \<br>| grep -q healthy'</div>
+          <div class="carousel-card-tip">jq -e exits non-zero if key is null — await retries correctly.</div>
+        </div>
+
+        <!-- 07 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">07</div>
+          <div class="carousel-card-title">CI passed → auto-merge</div>
+          <div class="carousel-card-cmd">await 'gh run view \<br>--exit-status' \<br>--timeout 300 \<br>--exec 'gh pr merge'</div>
+          <div class="carousel-card-tip">--timeout 300: give up after 5min if CI is stuck.</div>
+        </div>
+
+        <!-- 08 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">08</div>
+          <div class="carousel-card-title">Health-gated smoke tests</div>
+          <div class="carousel-card-cmd">await 'curl -sf \<br>staging.myapp.com/health' \<br>--timeout 120 \<br>--exec 'pytest tests/smoke'</div>
+          <div class="carousel-card-tip">Replace sleep 120 in your deploy pipeline.</div>
+        </div>
+
+        <!-- 09 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">09</div>
+          <div class="carousel-card-title">Site down alert</div>
+          <div class="carousel-card-cmd">await 'curl -sf myapp.com' \<br><span class="flag" title="--forever: restart after exec fires">--forever</span> \<br><span class="flag" title="--fail: invert — fires when curl FAILS">--fail</span> \<br>--exec 'ntfy send "down"'</div>
+          <div class="carousel-card-tip">--fail inverts: fires when site stops responding.</div>
+        </div>
+
+        <!-- 10 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">10</div>
+          <div class="carousel-card-title">File watcher (like entr)</div>
+          <div class="carousel-card-cmd">await 'stat *.go' \<br><span class="flag" title="--change: trigger on stdout change, not exit code">--change</span> \<br>--forever \<br>--exec 'go build &amp;&amp; ./server'</div>
+          <div class="carousel-card-tip">--change fires when output changes — works with any command.</div>
+        </div>
+
+        <!-- 11 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">11</div>
+          <div class="carousel-card-title">Wait for file to appear</div>
+          <div class="carousel-card-cmd">await \<br>'test -f /tmp/model.pkl' \<br>--exec 'python inference.py'</div>
+          <div class="carousel-card-tip">AI agents: wait for one agent's artifact before the next step.</div>
+        </div>
+
+        <!-- 12 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">12</div>
+          <div class="carousel-card-title">Wait for process to die</div>
+          <div class="carousel-card-cmd">await 'pgrep -x old-server' \<br><span class="flag" title="--fail: wait until pgrep FAILS (process is gone)">--fail</span> \<br>--exec 'systemctl start new'</div>
+          <div class="carousel-card-tip">--fail: wait until old server process is gone, then swap.</div>
+        </div>
+
+        <!-- 13 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">13</div>
+          <div class="carousel-card-title">DB has data</div>
+          <div class="carousel-card-cmd">await 'psql -c \<br>"SELECT count(*) FROM events" \<br>| grep -v " 0"'</div>
+          <div class="carousel-card-tip">grep -v inverts: succeeds when row count is NOT 0.</div>
+        </div>
+
+        <!-- 14 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">14</div>
+          <div class="carousel-card-title">Terraform infra ready</div>
+          <div class="carousel-card-cmd">await 'terraform output -json \<br>| jq .instance_ip.value'</div>
+          <div class="carousel-card-tip">Terraform output exits non-zero before resource exists.</div>
+        </div>
+
+        <!-- 15 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">15</div>
+          <div class="carousel-card-title">npm install in another tab</div>
+          <div class="carousel-card-cmd">await \<br>'test -f node_modules/<br>.package-lock.json' \<br>--exec 'npm run dev'</div>
+          <div class="carousel-card-tip">Wait for another terminal's npm install before starting dev server.</div>
+        </div>
+
+        <!-- 16 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">16</div>
+          <div class="carousel-card-title">Build done → deploy</div>
+          <div class="carousel-card-cmd">await 'test -f dist/bundle.js' \<br>--exec \<br>'scp -r dist/ prod:/var/www/'</div>
+          <div class="carousel-card-tip">Decouple long builds from dependent steps — no polling scripts.</div>
+        </div>
+
+        <!-- 17 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">17</div>
+          <div class="carousel-card-title">ML model trained</div>
+          <div class="carousel-card-cmd">await 'test -f model.pkl' \<br>--cmd-timeout 5 \<br>--exec 'python eval.py'</div>
+          <div class="carousel-card-tip">Training writes a file on completion — await detects it.</div>
+        </div>
+
+        <!-- 18 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">18</div>
+          <div class="carousel-card-title">Rate limit cleared</div>
+          <div class="carousel-card-cmd">await 'curl -sI api.github.com \<br>| grep "RateLimit-Remaining: 0"' \<br>--fail</div>
+          <div class="carousel-card-tip">--fail: wait until the rate-limit header disappears.</div>
+        </div>
+
+        <!-- 19 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">19</div>
+          <div class="carousel-card-title">Any of N succeeds</div>
+          <div class="carousel-card-cmd">await \<br>'curl -sf region-1.myapp.com' \<br>'curl -sf region-2.myapp.com' \<br><span class="flag" title="--any: exit when FIRST condition succeeds">--any</span></div>
+          <div class="carousel-card-tip">--any: exit when the FIRST condition succeeds, not all.</div>
+        </div>
+
+        <!-- 20 -->
+        <div class="carousel-card">
+          <div class="carousel-card-num">20</div>
+          <div class="carousel-card-title">limit retry attempts</div>
+          <div class="carousel-card-cmd">await 'curl -sf localhost:3000' \<br><span class="flag" title="--retry: give up after N attempts instead of waiting forever">--retry 10</span> \<br>--exec 'open localhost:3000'</div>
+          <div class="carousel-card-tip">--retry 10: try 10 times, then exit 1. Combine with --timeout for both limits.</div>
+        </div>
+
+      </div>
+    </div>
+    <div class="notes">The money slide. Limitless combinations — every CLI tool in the world + await = conditional execution.</div>
+  </section>
+
+  <!-- ── 10 INSTALL ────────────────────────────────────────────── -->
+  <section class="slide install-slide" id="s-install" data-title="Install">
+    <div class="slide-label" data-anim><span class="num">↓</span> install</div>
+    <h1 class="install-title" data-anim>get await.</h1>
+    <p class="install-tagline" data-anim>cold · 36KB · not written in Rust.</p>
+    <div class="install-box" data-anim>
+      <code id="install-cmd-2">curl https://i.jpillora.com/slavaGanzin/await! | bash</code>
+      <button onclick="copyInstall2()" id="copy-btn-2">copy</button>
+    </div>
+    <div class="install-alts" data-anim>
+      <code>nix-shell -p await</code>
+      <code>yay -S await</code>
+      <code>stew i slavaGanzin/await</code>
+    </div>
+    <div class="install-links" data-anim>
+      <a href="https://github.com/slavaGanzin/await" target="_blank">GitHub →</a>
+      <a href="/llms.txt" target="_blank">llms.txt → (full docs for AI)</a>
+    </div>
+    <div class="notes">Final slide. Install. Links. Done.</div>
+  </section>
+
+  <div class="deck-header">
+    <span>await.beer</span>
+    <span id="slide-label-hdr"></span>
+  </div>
+
+</div><!-- /.deck -->
+
+<script src="/ppt-runtime.js"></script>
+<script>
+// ── Copy install ──────────────────────────────────────────────
+function copyInstall() {
+  const cmd = document.getElementById('install-cmd').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+function copyInstall2() {
+  const cmd = document.getElementById('install-cmd-2').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const btn = document.getElementById('copy-btn-2');
+    btn.textContent = 'copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+// ── data-anim: cascade in when slide becomes active ──────────
+function animIn(slide) {
+  slide.querySelectorAll('[data-anim]').forEach((el, i) => {
+    if (el.classList.contains('anim-done')) return;
+    setTimeout(() => el.classList.add('anim-done'), i * 120);
+  });
+}
+
+// Hook into runtime's slide activation
+// Scripts are at end of body: DOM is already loaded, runtime already ran go(0)
+(function() {
+  const deck = document.querySelector('.deck');
+  if (!deck) return;
+  const slides = Array.from(deck.querySelectorAll('.slide'));
+  const hdrLabel = document.getElementById('slide-label-hdr');
+
+  function updateLabel() {
+    if (!hdrLabel) return;
+    const active = slides.find(s => s.classList.contains('is-active'));
+    if (active) hdrLabel.textContent = active.getAttribute('data-title') || '';
+  }
+
+  const obs = new MutationObserver(muts => {
+    muts.forEach(m => {
+      if (m.type === 'attributes' && m.attributeName === 'class') {
+        const el = m.target;
+        if (el.classList.contains('is-active')) { animIn(el); updateLabel(); }
+      }
+    });
+  });
+  slides.forEach(s => obs.observe(s, { attributes: true }));
+
+  // Animate the already-active slide (runtime already called go(0))
+  const first = slides.find(s => s.classList.contains('is-active'));
+  if (first) { animIn(first); updateLabel(); }
+})();
+
+// ── Carousel ──────────────────────────────────────────────────
+const CARDS_VISIBLE = 4;
+let carouselIdx = 0;
+const TOTAL_CARDS = 20;
+
+function carouselUpdate() {
+  const track = document.getElementById('carousel-track');
+  const counter = document.getElementById('carousel-counter');
+  if (!track) return;
+  const cardWidth = track.children[0].offsetWidth + 20; // gap=20
+  track.style.transform = `translateX(-${carouselIdx * cardWidth}px)`;
+  if (counter) counter.textContent = `${carouselIdx + 1} / ${TOTAL_CARDS}`;
+}
+
+function carouselNext() {
+  if (carouselIdx < TOTAL_CARDS - CARDS_VISIBLE) {
+    carouselIdx++;
+    carouselUpdate();
+  }
+}
+
+function carouselPrev() {
+  if (carouselIdx > 0) {
+    carouselIdx--;
+    carouselUpdate();
+  }
+}
+
+window.addEventListener('resize', carouselUpdate);
+</script>
+</body>
+</html>
