@@ -310,7 +310,7 @@ class TestFlagCombinations:
         """Test --interval flag changes polling frequency."""
         start_time = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            '--interval 1000 "echo \'test\'"',
+            '--interval 1 "echo \'test\'"',
             description="Should complete quickly since echo succeeds immediately"
         )
         end_time = time.time()
@@ -330,14 +330,14 @@ class TestTimeoutFlag:
             description="Should show timeout flag in help text"
         )
         assert returncode == 0
-        assert "--timeout -t" in stdout
-        assert "milliseconds to wait before giving up" in stdout
+        assert "--timeout -T" in stdout
+        assert "seconds to wait before giving up" in stdout
 
     def test_timeout_with_failing_command(self):
         """Test timeout exits after specified time with failing command."""
         start_time = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            '--timeout 2000 --silent "false"',
+            '--timeout 2 --silent "false"',
             timeout=5.0,
             description="Should timeout after 2 seconds"
         )
@@ -353,7 +353,7 @@ class TestTimeoutFlag:
         """Test timeout doesn't exit early if command succeeds quickly."""
         start_time = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            '--timeout 5000 --silent "true"',
+            '--timeout 5 --silent "true"',
             timeout=3.0,
             description="Should exit immediately when command succeeds, not wait for timeout"
         )
@@ -368,7 +368,7 @@ class TestTimeoutFlag:
     def test_timeout_message(self):
         """Test timeout shows appropriate message."""
         returncode, stdout, stderr = run_await_with_timeout(
-            '--timeout 1000 "false"',
+            '--timeout 1 "false"',
             timeout=3.0,
             description="Should show timeout message after 1 second"
         )
@@ -383,7 +383,7 @@ class TestTimeoutFlag:
     def test_timeout_with_silent_flag(self):
         """Test timeout with --silent suppresses timeout message."""
         returncode, stdout, stderr = run_await_with_timeout(
-            '--timeout 1000 --silent "false"',
+            '--timeout 1 --silent "false"',
             timeout=3.0,
             description="Should timeout silently without message"
         )
@@ -398,15 +398,15 @@ class TestTimeoutFlag:
         """Test -t short flag works."""
         start_time = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            '-t 1500 --silent "false"',
-            timeout=3.0,
-            description="Should timeout after 1.5 seconds with -t flag"
+            '-T 2 --silent "false"',
+            timeout=5.0,
+            description="Should timeout after 2 seconds with -T flag"
         )
         end_time = time.time()
 
         assert returncode == 1
         elapsed = end_time - start_time
-        assert 1.0 < elapsed < 2.5, f"Expected ~1.5s timeout, got {elapsed:.2f}s"
+        assert 1.5 < elapsed < 3.5, f"Expected ~2s timeout, got {elapsed:.2f}s"
 
     def test_timeout_with_change_flag(self):
         """Test timeout works with --change flag."""
@@ -418,7 +418,7 @@ class TestTimeoutFlag:
         try:
             start_time = time.time()
             returncode, stdout, stderr = run_await_with_timeout(
-                f'--timeout 1500 --change --silent "cat {test_file}"',
+                f'--timeout 2 --change --silent "cat {test_file}"',
                 timeout=3.0,
                 description="Should exit on first read (change from empty to content)"
             )
