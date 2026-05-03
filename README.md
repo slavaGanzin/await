@@ -153,36 +153,6 @@ await 'ps aux | head -10' --watch --interval 2000
 await 'tail -5 /var/log/system.log' --watch
 ```
 
-## For AI Agents
-
-`await` is the missing primitive for AI agent scripts. Instead of fragile `sleep` loops, give your agent a single command that blocks until the world catches up — then proceeds.
-
-```bash
-# Wait for a service to become healthy (5s per attempt, give up after 30s)
-await 'curl -sf localhost:3000/health' -t 5 -T 30000
-
-# Wait for a Kubernetes pod to be running
-await 'kubectl get pod app -o jsonpath={.status.phase} | grep Running' -t 3 -T 60000
-
-# Wait for a file the agent wrote asynchronously
-await 'test -f /tmp/result.json'
-
-# Wait for database to accept connections
-await 'pg_isready -h localhost' -t 2 -T 30000
-
-# Wait for deployment, then run smoke tests
-await 'curl -sf https://myapp.com/health' -t 3 -T 60000 --exec 'pytest tests/smoke/'
-```
-
-Key flags for agents:
-- `-t <seconds>` — kill each attempt after N seconds and retry (prevents zombie processes from hanging connections)
-- `-T <milliseconds>` — global deadline — never let an agent block forever
-- `--exec` — chain the next step once the condition is met, with `\1` `\2` stdout substitution
-
-Exit codes: `0` = condition met, `1` = timed out.
-
-> Full machine-readable docs: https://await.beer/llms.txt
-
 ## --help
 ```bash
 await [options] commands
