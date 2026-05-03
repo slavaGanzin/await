@@ -407,11 +407,8 @@ char * highlight_differences(const char *old_text, const char *new_text) {
         }
       }
     }
-
-    sprintf(out[i], "%s%s", out[i], buf);
-    if (!silent && verbose) printf("\n\n%s", buf);
   }
-  
+
   // Close highlighting if still open
   if (in_diff) {
     strcat(highlighted, "\033[0m");
