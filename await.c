@@ -12,6 +12,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <time.h>
+#include <sys/time.h>
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -34,6 +36,9 @@ COMMAND exec;
 typedef struct {
   int expectedStatus;
   int interval;
+  int timeout;
+  int cmd_timeout;
+  long start_time;
   int any;
   int change;
   int silent;
@@ -47,9 +52,10 @@ typedef struct {
   char* args;
   int nCommands;
   int no_stderr;
+  int retry;
 } ARGS;
 
-ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args=""};
+ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0, .cmd_timeout=0, .retry=0};
 
 int const BUF_SIZE = 1024;
 int const CHUNK_SIZE = BUF_SIZE * 100;
@@ -97,7 +103,7 @@ void print_autocomplete_fish() {
          "    set -l cmd (commandline -opc)\n"
          "    for i in $cmd\n"
          "        switch $i\n"
-         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --watch\n"
+         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --forever --service --watch\n"
          "                return 1\n"
          "        end\n"
          "    end\n"
@@ -113,7 +119,10 @@ void print_autocomplete_fish() {
          "complete -c await -n '__fish_await_no_subcommand' -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l diff -s d -d 'Highlight differences between previous and current output'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l exec -s e -d 'Run some shell command on success' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Milliseconds between one round of commands [default: 200]' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Seconds between one round of commands [default: 0.2]' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l timeout -s T -d 'Seconds to wait before giving up [default: 0]' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l cmd-timeout -s t -d 'Seconds per command before killing it' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l retry -s r -d 'Max number of attempts before giving up [default: 0 (unlimited)]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
@@ -130,10 +139,10 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --forever --service --version --no-stderr --watch\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --forever --service --version --no-stderr --watch\"\n"
          "\n"
          "    case \"${prev}\" in\n"
-         "        --status|--exec|--interval)\n"
+         "        --status|--exec|--interval|--timeout|--cmd-timeout)\n"
          "            COMPREPLY=($(compgen -f -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
@@ -170,7 +179,9 @@ void print_autocomplete_zsh() {
          "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
          "    '--diff[Highlight differences between previous and current output]' \\\n"
          "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
-         "    '--interval[Milliseconds between rounds of commands (default: 200)]::interval' \\\n"
+         "    '--interval[Seconds between rounds of commands (default: 0.2)]::interval' \\\n"
+         "    '--timeout[Seconds to wait before giving up (default: 0)]::timeout' \\\n"
+         "    '--cmd-timeout[Seconds per command before killing it]::cmd-timeout' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]'\n"
@@ -317,6 +328,12 @@ int msleep(long msec)
     return res;
 }
 
+long current_time_ms() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
+}
+
 char * replace_placeholders(char *string) {
   for(int i = 0; i < args.nCommands; i = i + 1) {
     if (!c[i].previousOut) continue;
@@ -438,7 +455,10 @@ void help() {
   "  --change -c\t\t#waiting for stdout to change and ignore status codes\n"
   "  --diff -d\t\t#highlight differences between previous and current output (like watch -d)\n"
   "  --exec -e\t\t#run some shell command on success;\n"
-  "  --interval -i\t\t#milliseconds between one round of commands [default: 200]\n"
+  "  --interval -i\t\t#seconds between one round of commands [default: 0.2]\n"
+  "  --timeout -T\t\t#seconds to wait before giving up [default: 0 (no timeout)]\n"
+  "  --cmd-timeout -t\t#seconds per command before killing it (wraps with timeout(1))\n"
+  "  --retry -r\t\t#max number of attempts before giving up [default: 0 (unlimited)]\n"
   "  --forever -F\t\t#do not exit ever\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
@@ -483,8 +503,11 @@ void parse_args(int argc, char *argv[]) {
             {"service", required_argument, 0, 'S'},
             {"status",  required_argument, 0, 's'},
             {"exec",    required_argument, 0, 'e'},
-            {"interval",required_argument, 0, 'i'},
-            {"no-stderr", no_argument, 0, 'E'},
+            {"interval",    required_argument, 0, 'i'},
+            {"timeout",     required_argument, 0, 'T'},
+            {"cmd-timeout", required_argument, 0, 't'},
+            {"retry",       required_argument, 0, 'r'},
+            {"no-stderr",   no_argument,       0, 'E'},
             {"watch", no_argument, 0, 'w'},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
@@ -494,14 +517,14 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:Ew", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ew", long_options, &option_index);
 
         if (getopt == -1)
           break;
 
         if (getopt != 'S') {
           strcat(args.args, "--");
-          for (int i =0; i<12; i++) {
+          for (int i =0; i<18; i++) {
             if (long_options[i].val == getopt)
               strcat(args.args, long_options[i].name);
           }
@@ -539,9 +562,12 @@ void parse_args(int argc, char *argv[]) {
           case 'F': args.forever = 1; break;
           case 'c': args.change = 1; break;
           case 'S': args.service = optarg; break;
-          case 'i': args.interval = atoi(optarg); break;
+          case 'i': args.interval = atoi(optarg) * 1000; break;
+          case 'T': args.timeout = atoi(optarg) * 1000; break;
+          case 't': args.cmd_timeout = atoi(optarg); break;
+          case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.4.0\n"); exit(0); break;
+          case 'v': printf("2.5.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -650,7 +676,10 @@ void *shell(void * arg) {
       }
       
       close(pipefd[1]);
-      execl("/bin/sh", "sh", "-c", replace_placeholders(c->command), NULL);
+      if (args.cmd_timeout > 0)
+        alarm(args.cmd_timeout);
+      char *cmd = replace_placeholders(c->command);
+      execl("/bin/sh", "sh", "-c", cmd, NULL);
       exit(1);
     } else {
       // Parent process
@@ -674,7 +703,7 @@ void *shell(void * arg) {
     fclose(fp);
     int status;
     waitpid(c->pid, &status, 0);
-    c->status = WEXITSTATUS(status);
+    c->status = WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
     }
 
     if (strcmp(c->previousOut, "first run") != 0) {
@@ -729,6 +758,7 @@ int main(int argc, char *argv[]) {
   }
 
   int not_done = 0;
+  int rounds = 0;
     // TODO: make a clear screen option
     // fprintf(stdout, "\033[2J\033[H");
     // fprintf(stderr, "\033[2J\033[H");
@@ -738,7 +768,12 @@ int main(int argc, char *argv[]) {
   static int first_output = 1;
   static char *last_display = NULL;
   static char *last_silent_output = NULL;
-  
+
+  // Initialize start time for timeout
+  if (args.timeout > 0) {
+    args.start_time = current_time_ms();
+  }
+
   while (1) {
     not_done = 0;
     
@@ -903,9 +938,31 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
             return 0;
           }
+          msleep(10);  // Sleep 10ms to allow exec thread to run
         }
       }
     }
+
+    // Check timeout
+    if (args.timeout > 0) {
+      long elapsed = current_time_ms() - args.start_time;
+      if (elapsed >= args.timeout) {
+        if (!args.silent) {
+          fprintf(stderr, "\n\033[0;31mTimeout reached after %ld ms\033[0m\n", elapsed);
+        }
+        return 1;
+      }
+    }
+
+    // Check retry limit
+    rounds++;
+    if (args.retry > 0 && rounds >= args.retry) {
+      if (!args.silent) {
+        fprintf(stderr, "\n\033[0;31mGiving up after %d attempts\033[0m\n", rounds);
+      }
+      return 1;
+    }
+
     msleep(args.interval);
   }
 

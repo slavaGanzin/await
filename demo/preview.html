@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>await - Demo Video</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, system-ui, sans-serif;
+            color: #fff;
+            overflow: hidden;
+        }
+
+        /* Animated gradient background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg,
+                #1a1a2e 0%,
+                #16213e 25%,
+                #0f3460 50%,
+                #16213e 75%,
+                #1a1a2e 100%);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
+            z-index: -1;
+        }
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .scene {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .scene h1 {
+            font-size: 80px;
+            margin-bottom: 20px;
+            font-family: monospace;
+            text-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .scene h2 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+        }
+
+        .scene p {
+            font-size: 32px;
+            color: #ccc;
+            margin: 10px 0;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        }
+
+        .scene code {
+            color: #fff;
+            background: rgba(51, 51, 51, 0.8);
+            padding: 4px 12px;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        video {
+            max-width: 90vw;
+            max-height: 60vh;
+            border-radius: 10px;
+            margin-top: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+
+    <script>
+        const scenes = [
+            {
+                type: 'title',
+                duration: 4000,
+                content: `
+                    <div class="scene fade-in">
+                        <h1>await</h1>
+                        <p>Poll commands until they succeed or fail</p>
+                        <p style="color: #999; margin-top: 40px;">36KB • Pure C • No dependencies</p>
+                    </div>
+                `
+            },
+            {
+                type: 'demo',
+                duration: 6000,
+                video: 'demo-fail-fast.mp4',
+                content: `
+                    <div class="scene fade-in">
+                        <h2>Exit on First Failure</h2>
+                        <p>Use <code>--fail</code> to stop at the first failing command</p>
+                        <video src="demo-fail-fast.mp4" autoplay muted loop></video>
+                    </div>
+                `
+            },
+            {
+                type: 'demo',
+                duration: 7000,
+                video: 'demo-placeholders.mp4',
+                content: `
+                    <div class="scene fade-in">
+                        <h2>Placeholder Substitution</h2>
+                        <p>Use <code>\\1 \\2 \\3</code> to reference command outputs</p>
+                        <video src="demo-placeholders.mp4" autoplay muted loop></video>
+                    </div>
+                `
+            },
+            {
+                type: 'demo',
+                duration: 6000,
+                video: 'demo-timeout.mp4',
+                content: `
+                    <div class="scene fade-in">
+                        <h2>Timeout Support</h2>
+                        <p>Use <code>--timeout</code> to prevent infinite waiting</p>
+                        <video src="demo-timeout.mp4" autoplay muted loop></video>
+                    </div>
+                `
+            },
+            {
+                type: 'end',
+                duration: 3000,
+                content: `
+                    <div class="scene fade-in">
+                        <h1>await</h1>
+                        <p style="font-size: 40px; color: #fff; margin-top: 40px;">github.com/yourusername/await</p>
+                    </div>
+                `
+            }
+        ];
+
+        const container = document.getElementById('container');
+        let currentScene = 0;
+
+        function showScene(index) {
+            if (index >= scenes.length) {
+                currentScene = 0;
+                index = 0;
+            }
+
+            container.innerHTML = scenes[index].content;
+
+            setTimeout(() => {
+                currentScene++;
+                showScene(currentScene);
+            }, scenes[index].duration);
+        }
+
+        showScene(0);
+    </script>
+</body>
+</html>
