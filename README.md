@@ -238,7 +238,7 @@ OPTIONS:
   --change -c		#waiting for stdout to change and ignore status codes
   --diff -d		#highlight differences between previous and current output (like watch -d)
   --exec -e		#run some shell command on success;
-  --interval -i		#milliseconds between one round of commands [default: 200]
+  --interval -i		#seconds between one round of commands [default: 0.2]
   --timeout -T		#seconds to wait before giving up [default: 0 (no timeout)]
   --cmd-timeout -t	#seconds per command before killing it (wraps with timeout(1))
   --retry -r		#max number of attempts before giving up [default: 0 (unlimited)]

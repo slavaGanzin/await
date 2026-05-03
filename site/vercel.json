@@ -1,8 +1,0 @@
-{
-  "outputDirectory": "public",
-  "buildCommand": null,
-  "framework": null,
-  "rewrites": [
-    { "source": "/install", "destination": "/install.sh" }
-  ]
-}
