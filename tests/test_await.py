@@ -1042,6 +1042,117 @@ class TestAutocompletion:
         assert '_arguments' in stdout
 
 
+class TestJson:
+    def test_json_output_success(self):
+        """--json emits valid JSON on success."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "echo hello"',
+            description="Should output JSON with success=true"
+        )
+        assert returncode == 0
+        data = json.loads(stdout.strip())
+        assert data['success'] is True
+        assert 'commands' in data
+        assert len(data['commands']) == 1
+        assert data['commands'][0]['status'] == 0
+
+    def test_json_output_contains_command_output(self):
+        """--json includes stdout of each command."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "echo hello"',
+            description="Should include command output in JSON"
+        )
+        assert returncode == 0
+        data = json.loads(stdout.strip())
+        assert 'hello' in data['commands'][0]['output']
+
+    def test_json_output_failure_on_timeout(self):
+        """--json emits success=false on timeout."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json --timeout 1 "exit 1"',
+            timeout=5,
+            description="Should output JSON with success=false on timeout"
+        )
+        assert returncode == 1
+        data = json.loads(stdout.strip())
+        assert data['success'] is False
+
+    def test_json_multiple_commands(self):
+        """--json includes all commands in output."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "echo foo" "echo bar"',
+            description="Should include both commands in JSON"
+        )
+        assert returncode == 0
+        data = json.loads(stdout.strip())
+        assert len(data['commands']) == 2
+        outputs = [cmd['output'] for cmd in data['commands']]
+        assert any('foo' in o for o in outputs)
+        assert any('bar' in o for o in outputs)
+
+    def test_json_elapsed_ms_present(self):
+        """--json includes elapsed_ms field."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "echo ok"',
+            description="Should include elapsed_ms in JSON"
+        )
+        assert returncode == 0
+        data = json.loads(stdout.strip())
+        assert 'elapsed_ms' in data
+
+
+class TestName:
+    def test_name_shown_in_spinner(self):
+        """--name label replaces command in spinner output."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--name db "echo ok"',
+            description="Should show 'db' in spinner instead of full command"
+        )
+        assert returncode == 0
+        assert 'db' in stderr
+        assert 'echo ok' not in stderr
+
+    def test_name_substitution_in_exec(self):
+        """\\name substitution works in --exec."""
+        import tempfile, os
+        out_file = os.path.join(TMPDIR, 'await_name_test.txt')
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'--silent --name greeting "printf hello" --exec \'printf "\\\\greeting world" > {out_file}\'',
+            description="Should substitute \\greeting with command output in --exec"
+        )
+        assert returncode == 0
+        assert os.path.exists(out_file)
+        content = open(out_file).read()
+        assert 'hello world' in content
+        os.unlink(out_file)
+
+    def test_name_multiple_commands(self):
+        """Multiple --name flags label each command independently."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--name db "echo ok" --name api "echo ok"',
+            description="Should show both labels in spinner"
+        )
+        assert returncode == 0
+        assert 'db' in stderr
+        assert 'api' in stderr
+
+    def test_name_in_json_output(self):
+        """--name label appears in --json output."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json --name mydb "echo ok"',
+            description="Should use label as name field in JSON"
+        )
+        assert returncode == 0
+        data = json.loads(stdout.strip())
+        assert data['commands'][0]['name'] == 'mydb'
+
+
 if __name__ == "__main__":
     # Make sure await binary exists
     if not os.path.exists("../await"):

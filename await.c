@@ -20,6 +20,7 @@ char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
 typedef struct {
   int spinner;
   char *command;
+  char *name;
   char *out;
   char *previousOut;
   char *diffOut;  // For storing difference-highlighted output
@@ -53,6 +54,7 @@ typedef struct {
   int nCommands;
   int no_stderr;
   int retry;
+  int json;
 } ARGS;
 
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0, .cmd_timeout=0, .retry=0};
@@ -341,7 +343,35 @@ char * replace_placeholders(char *string) {
     sprintf(C, "\\%d", i+1);
     string = replace(C, c[i].previousOut, string);
   }
+  for(int i = 1; i <= args.nCommands; i++) {
+    if (!c[i].previousOut || !c[i].name || c[i].name == c[i].command) continue;
+    char named[256];
+    snprintf(named, sizeof(named), "\\%s", c[i].name);
+    string = replace(named, c[i].previousOut, string);
+  }
   return string;
+}
+
+void print_json_result(int exit_code) {
+  long elapsed = args.timeout > 0 ? current_time_ms() - args.start_time : 0;
+  printf("{\"success\":%s,\"elapsed_ms\":%ld,\"commands\":[",
+    exit_code == 0 ? "true" : "false", elapsed);
+  for (int i = 1; i <= args.nCommands; i++) {
+    if (i > 1) printf(",");
+    char *out = c[i].previousOut ? c[i].previousOut : "";
+    // escape quotes in output
+    printf("{\"name\":\"%s\",\"command\":\"%s\",\"status\":%d,\"output\":\"",
+      c[i].name ? c[i].name : "", c[i].command, c[i].status);
+    for (char *p = out; *p; p++) {
+      if (*p == '"') printf("\\\"");
+      else if (*p == '\\') printf("\\\\");
+      else if (*p == '\n') printf("\\n");
+      else if (*p == '\r') printf("\\r");
+      else putchar(*p);
+    }
+    printf("\"}");
+  }
+  printf("]}\n");
 }
 
 char * colorize_comments(char *string) {
@@ -460,6 +490,8 @@ void help() {
   "  --cmd-timeout -t\t#seconds per command before killing it (wraps with timeout(1))\n"
   "  --retry -r\t\t#max number of attempts before giving up [default: 0 (unlimited)]\n"
   "  --forever -F\t\t#do not exit ever\n"
+  "  --name -n\t\t#label for the next command (shown in spinner, usable as \\name in --exec)\n"
+  "  --json -j\t\t#output results as JSON on exit\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
 
@@ -486,6 +518,8 @@ volatile sig_atomic_t stop = 0;
 
 void parse_args(int argc, char *argv[]) {
     int getopt;
+    char *names[100] = {NULL};
+    int names_count = 0;
 
     args.args = malloc(1000);
 
@@ -509,6 +543,8 @@ void parse_args(int argc, char *argv[]) {
             {"retry",       required_argument, 0, 'r'},
             {"no-stderr",   no_argument,       0, 'E'},
             {"watch", no_argument, 0, 'w'},
+            {"name",  required_argument, 0, 'n'},
+            {"json",  no_argument,       0, 'j'},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
             {"autocomplete-bash", no_argument, 0, 0},
@@ -517,7 +553,7 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ew", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ewn:j", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -588,13 +624,15 @@ void parse_args(int argc, char *argv[]) {
             }
             break;
           case 'E': args.no_stderr = 1; break;
-          case 'w': 
-            args.fail = 1; 
-            args.silent = 1; 
-            args.stdout = 1; 
-            args.diff = 1; 
-            args.no_stderr = 1; 
+          case 'w':
+            args.fail = 1;
+            args.silent = 1;
+            args.stdout = 1;
+            args.diff = 1;
+            args.no_stderr = 1;
             break;
+          case 'n': names[names_count++] = optarg; break;
+          case 'j': args.json = 1; break;
         }
       }
 
@@ -607,7 +645,9 @@ void parse_args(int argc, char *argv[]) {
       strcat(args.args, " \"");
       strcat(args.args, argv[optind]);
       strcat(args.args, "\"");
-      c[++args.nCommands].command = argv[optind++];
+      c[++args.nCommands].command = argv[optind];
+      c[args.nCommands].name = (args.nCommands <= names_count && names[args.nCommands-1]) ? names[args.nCommands-1] : argv[optind];
+      optind++;
     }
 
     if (args.nCommands == 0) help();
@@ -801,7 +841,7 @@ int main(int argc, char *argv[]) {
         
         // Add status line
         char status_line[1000];
-        sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].command);
+        sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         strcat(display, status_line);
         
         // Add output if available, or previous output if command has run before
@@ -932,13 +972,18 @@ int main(int argc, char *argv[]) {
       }
 
       if (!args.forever) {
+        if (!args.exec) {
+          fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+          if (args.json) print_json_result(0);
+          return 0;
+        }
         while (1) {
-          int color = exec.status == -1 ? 7 : exec.status == args.expectedStatus ? 2 : 1;
           if (exec.spinner == 0) {
             fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+            if (args.json) print_json_result(0);
             return 0;
           }
-          msleep(10);  // Sleep 10ms to allow exec thread to run
+          msleep(10);
         }
       }
     }
@@ -950,6 +995,7 @@ int main(int argc, char *argv[]) {
         if (!args.silent) {
           fprintf(stderr, "\n\033[0;31mTimeout reached after %ld ms\033[0m\n", elapsed);
         }
+        if (args.json) print_json_result(1);
         return 1;
       }
     }
@@ -960,6 +1006,7 @@ int main(int argc, char *argv[]) {
       if (!args.silent) {
         fprintf(stderr, "\n\033[0;31mGiving up after %d attempts\033[0m\n", rounds);
       }
+      if (args.json) print_json_result(1);
       return 1;
     }
 

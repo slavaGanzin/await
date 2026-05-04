@@ -211,6 +211,8 @@ OPTIONS:
   --cmd-timeout -t	#seconds per command before killing it (wraps with timeout(1))
   --retry -r		#max number of attempts before giving up [default: 0 (unlimited)]
   --forever -F		#do not exit ever
+  --name -n		#label for the next command (shown in spinner, usable as \name in --exec)
+  --json -j		#output results as JSON on exit
   --service -S		#create systemd user service with same parameters and activate it
   --version -v		#print the version of await
   --autocompletions	#detect installed shells and auto-install completions for all of them
