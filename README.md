@@ -7,8 +7,6 @@
 
 **Platform support:** Linux and macOS only
 
-> By the way, it's not written in Rust.
-
 ### install
 ```bash
 # recommended way (crossplatform)

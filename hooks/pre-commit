@@ -13,8 +13,6 @@ $(du -h build/await | sed -E 's/\s?(.*)\s.*/\1/'), small memory footprint, singl
 
 **Platform support:** Linux and macOS only
 
-> By the way, it's not written in Rust.
-
 ### install
 \`\`\`bash
 # recommended way (crossplatform)
@@ -167,5 +165,3 @@ $(./build/await --help | sed 's/\x1b\[[0-9;]*m//g')
 \`\`\`
 """ > README.md
 git add README.md
-
-cp build/await /usr/local/bin/await
