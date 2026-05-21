@@ -31,6 +31,7 @@ typedef struct {
   pthread_t thread;
   long start_time;
   long last_duration_ms;
+  long prev_duration_ms;
 } COMMAND;
 
 COMMAND c[100];
@@ -751,6 +752,7 @@ void *shell(void * arg) {
     int status;
     waitpid(c->pid, &status, 0);
     c->status = WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    c->prev_duration_ms = c->last_duration_ms;
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
@@ -849,8 +851,14 @@ int main(int argc, char *argv[]) {
         
         // Add status line
         char status_line[1000];
-        if (args.lap && c[i].last_duration_ms > 0)
-          sprintf(status_line, "\033[2m%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+        if (args.lap && c[i].last_duration_ms > 0) {
+          const char *time_color = "\033[2m";
+          if (c[i].prev_duration_ms > 0) {
+            if (c[i].last_duration_ms < c[i].prev_duration_ms) time_color = "\033[32m";
+            else if (c[i].last_duration_ms > c[i].prev_duration_ms) time_color = "\033[31m";
+          }
+          sprintf(status_line, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+        }
         else if (args.lap)
           sprintf(status_line, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         else
