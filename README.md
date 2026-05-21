@@ -213,6 +213,7 @@ OPTIONS:
   --forever -F		#do not exit ever
   --name -n		#label for the next command (shown in spinner, usable as \name in --exec)
   --json -j		#output results as JSON on exit
+  --lap -l		#show last run duration per command in spinner
   --service -S		#create systemd user service with same parameters and activate it
   --version -v		#print the version of await
   --autocompletions	#detect installed shells and auto-install completions for all of them

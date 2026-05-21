@@ -29,6 +29,8 @@ typedef struct {
   int change;
   int pid;
   pthread_t thread;
+  long start_time;
+  long last_duration_ms;
 } COMMAND;
 
 COMMAND c[100];
@@ -55,6 +57,7 @@ typedef struct {
   int no_stderr;
   int retry;
   int json;
+  int lap;
 } ARGS;
 
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0, .cmd_timeout=0, .retry=0};
@@ -492,6 +495,7 @@ void help() {
   "  --forever -F\t\t#do not exit ever\n"
   "  --name -n\t\t#label for the next command (shown in spinner, usable as \\name in --exec)\n"
   "  --json -j\t\t#output results as JSON on exit\n"
+  "  --lap -l\t\t#show last run duration per command in spinner\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
 
@@ -545,6 +549,7 @@ void parse_args(int argc, char *argv[]) {
             {"watch", no_argument, 0, 'w'},
             {"name",  required_argument, 0, 'n'},
             {"json",  no_argument,       0, 'j'},
+            {"lap",   no_argument,       0, 'l'},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
             {"autocomplete-bash", no_argument, 0, 0},
@@ -553,7 +558,7 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ewn:j", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ewn:jl", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -633,6 +638,7 @@ void parse_args(int argc, char *argv[]) {
             break;
           case 'n': names[names_count++] = optarg; break;
           case 'j': args.json = 1; break;
+          case 'l': args.lap = 1; break;
         }
       }
 
@@ -698,10 +704,11 @@ void *shell(void * arg) {
   while (1) {
     c->outPos = 0;
     strcpy(c->out, "");
-    
+
     int pipefd[2];
     pipe(pipefd);
-    
+
+    c->start_time = current_time_ms();
     pid_t child_pid = fork();
     if (child_pid == 0) {
       // Child process
@@ -744,6 +751,7 @@ void *shell(void * arg) {
     int status;
     waitpid(c->pid, &status, 0);
     c->status = WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
     if (strcmp(c->previousOut, "first run") != 0) {
@@ -841,7 +849,12 @@ int main(int argc, char *argv[]) {
         
         // Add status line
         char status_line[1000];
-        sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+        if (args.lap && c[i].last_duration_ms > 0)
+          sprintf(status_line, "\033[2m%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+        else if (args.lap)
+          sprintf(status_line, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+        else
+          sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         strcat(display, status_line);
         
         // Add output if available, or previous output if command has run before
