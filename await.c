@@ -27,6 +27,7 @@ typedef struct {
   size_t outPos;
   int status;
   int change;
+  int warned127;
   int pid;
   pthread_t thread;
   long start_time;
@@ -521,6 +522,14 @@ volatile sig_atomic_t stop = 0;
 //     stop = 1;
 // }
 
+int looks_like_bare_url(const char *s) {
+  if (strncmp(s, "http://", 7) != 0 && strncmp(s, "https://", 8) != 0)
+    return 0;
+  // If it contains shell metacharacters or whitespace, the user already
+  // wrapped it in a real command (e.g. "curl http://x | grep y").
+  return strpbrk(s, " \t|&;<>()$`\\\"'") == NULL;
+}
+
 void parse_args(int argc, char *argv[]) {
     int getopt;
     char *names[100] = {NULL};
@@ -609,7 +618,7 @@ void parse_args(int argc, char *argv[]) {
           case 't': args.cmd_timeout = atoi(optarg); break;
           case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.6.0\n"); exit(0); break;
+          case 'v': printf("2.7.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -649,6 +658,13 @@ void parse_args(int argc, char *argv[]) {
     c[0].command = "";
 
     while (optind < argc) {
+      if (looks_like_bare_url(argv[optind])) {
+        fprintf(stderr,
+          "await: '%s' looks like a URL, not a command.\n"
+          "       await runs shell commands, not URLs directly. Try:\n"
+          "         await 'curl -sf %s'\n",
+          argv[optind], argv[optind]);
+      }
       strcat(args.args, " \"");
       strcat(args.args, argv[optind]);
       strcat(args.args, "\"");
@@ -752,6 +768,12 @@ void *shell(void * arg) {
     int status;
     waitpid(c->pid, &status, 0);
     c->status = WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    if (c->status == 127 && !c->warned127) {
+      c->warned127 = 1;
+      fprintf(stderr, "\nawait: '%s' exited with 127 (command not found).\n"
+                       "       Check for a typo, or that it's installed and on PATH.\n",
+                       c->command);
+    }
     c->prev_duration_ms = c->last_duration_ms;
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
@@ -1015,6 +1037,17 @@ int main(int argc, char *argv[]) {
       if (elapsed >= args.timeout) {
         if (!args.silent) {
           fprintf(stderr, "\n\033[0;31mTimeout reached after %ld ms\033[0m\n", elapsed);
+          for (int i = 1; i <= args.nCommands; i++) {
+            if (c[i].status == -1) {
+              fprintf(stderr, "  '%s': still running / no completed attempt\n", c[i].command);
+            } else if (c[i].status == 127) {
+              fprintf(stderr, "  '%s': last exit 127 (command not found)\n", c[i].command);
+            } else if (c[i].status == 126) {
+              fprintf(stderr, "  '%s': last exit 126 (not executable / permission denied)\n", c[i].command);
+            } else {
+              fprintf(stderr, "  '%s': last exit %d\n", c[i].command, c[i].status);
+            }
+          }
         }
         if (args.json) print_json_result(1);
         return 1;

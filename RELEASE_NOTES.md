@@ -1,5 +1,19 @@
 # Release Notes
 
+## 2.7.0
+
+### New Features
+
+- **`--lap` / `-l`** — Show each command's last run duration in the spinner, colored green when faster than the previous run and red when slower. Handy for spotting performance regressions while watching a command loop.
+
+### Fixes
+
+- Passing a bare URL as a command (e.g. `await --timeout 60 http://example.com`) now prints a clear hint to wrap it in `curl` instead of failing with a cryptic `sh: ...: No such file or directory`.
+- A command that exits with status 127 (not found) now gets a one-time note suggesting a typo check or missing PATH entry, instead of only the raw shell error.
+- On timeout, await now prints each command's last exit status (including friendly labels for "command not found" and "permission denied") so you know exactly what was still failing when it gave up.
+
+---
+
 ## 2.6.0
 
 ### New Features
