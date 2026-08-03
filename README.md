@@ -170,14 +170,26 @@ EXAMPLES:
 # action on specific file type changes
   await 'stat **.c' --change --forever --exec 'gcc *.c -o await -lpthread'
 
+# Kubernetes: wait for the pod, then forward the port
+  await 'kubectl get pod myapp | grep Running' --timeout 120 \
+	--exec 'kubectl port-forward pod/myapp 8080:80'
+
+# wait for postgres AND redis, then run the migration
+  await 'pg_isready -h localhost' 'redis-cli ping' \
+	--exec 'python manage.py migrate'
+
+# poll CI, auto-merge the moment it turns green
+  await 'gh run view --exit-status' --timeout 1800 --interval 30 \
+	--exec 'gh pr merge --auto --squash'
+
+# connect to whichever replica answers first
+  await 'curl -sf primary.db/health' 'curl -sf replica.db/health' --any --exec connect_to_db
+
 # waiting google (or your internet connection) to fail
   await 'curl google.com' --fail
 
 # waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)
   await 'curl google.com' --status 7
-
-# waits for redis socket and then connects to
-  await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/redis.sock' --exec 'redis-cli -s /tmp/redis.sock'
 
 # lazy version
   await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock
@@ -185,13 +197,11 @@ EXAMPLES:
 # daily checking if I am on french reviera. Just in case
   await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400
 
-# Yet another server monitor
-  await "curl 'https://whatnot.ai' &>/dev/null && echo 'UP' || echo 'DOWN'" --forever --change\
-    --exec "ntfy send \'whatnot.ai \1\'"
+# get pinged the moment your site goes down
+  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"'
 
-# waiting for new iPhone in daemon mode
-  await 'curl "https://www.apple.com/iphone/" -s | pup ".hero-eyebrow text{}" | grep -v 12'\
- --change --interval 86400 --daemon --exec "ntfy send \1"
+# ...as a systemd daemon that survives reboots
+  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"' --service site-monitor
 
 
 OPTIONS:
