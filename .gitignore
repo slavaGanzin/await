@@ -21,3 +21,6 @@ cmake_install.cmake
 await.bash
 await.fish
 await.zsh
+
+# local-only script, never commit (touches a live PostHog API key)
+scripts/posthog-pull.js
