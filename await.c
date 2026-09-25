@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <spawn.h>
 #include <poll.h>
 
@@ -26,8 +27,9 @@ extern char **environ;
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
+// fields the command's thread updates and the main loop reads are atomic
 typedef struct {
-  int spinner;
+  _Atomic int spinner;
   char *command;
   char *name;
   char *out;
@@ -35,17 +37,20 @@ typedef struct {
   char *diffOut;  // For storing difference-highlighted output
   size_t outPos;
   size_t outCap;
-  int status;
+  _Atomic int status;
   int change;
   int warned127;
   int pid;
   pthread_t thread;
   long start_time;
-  long last_duration_ms;
-  long prev_duration_ms;
-  volatile int runs;     // completed runs
-  volatile int changes;  // runs whose stdout differed from the previous run
+  _Atomic long last_duration_ms;
+  _Atomic long prev_duration_ms;
+  _Atomic int runs;      // completed runs
+  _Atomic int changes;   // runs whose stdout differed from the previous run
   int seenChanges;       // changes already acted on by the main loop
+  // guards out/outPos/outCap/previousOut/diffOut: the command's thread
+  // writes them while the main loop and other commands read them
+  pthread_mutex_t lock;
 } COMMAND;
 
 COMMAND *c;
@@ -358,7 +363,9 @@ long current_time_ms() {
 
 // command output without trailing newlines, like shell $(...)
 char * substitution(COMMAND *cmd) {
+  pthread_mutex_lock(&cmd->lock);
   char *out = strdup(cmd->previousOut);
+  pthread_mutex_unlock(&cmd->lock);
   size_t len = strlen(out);
   while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r')) out[--len] = '\0';
   return out;
@@ -414,7 +421,7 @@ char * replace_placeholders(const char *string) {
       // \\1 means \1: a backslash left in front of the reference would escape its $
       if (p[1] == '\\' && quote != '\'' && placeholder(p + 1, &plen)) p++;
       COMMAND *src = placeholder(p, &plen);
-      if (src && src->runs && src->previousOut) {
+      if (src && src->runs) {
         buf_add_reference(&out, &len, &cap, (int)(src - c), quote);
         p += plen;
         continue;
@@ -442,7 +449,7 @@ char ** command_env() {
   for (size_t i = 0; i < n; i++)
     if (strncmp(environ[i], "AWAIT_", 6) != 0) env[k++] = environ[i];
   for (int i = 1; i <= args.nCommands; i++) {
-    if (!c[i].runs || !c[i].previousOut) continue;
+    if (!c[i].runs) continue;
     char *value = substitution(&c[i]);
     env[k] = malloc(strlen(value) + 32);
     sprintf(env[k++], "AWAIT_%d=%s", i, value);
@@ -526,6 +533,18 @@ void print_json_string(const char *s) {
   putchar('"');
 }
 
+// copy of what to display for a command: its diff (with --diff), the output
+// of the run in progress, or else its last completed output; NULL if none
+char * output_snapshot(COMMAND *cmd) {
+  char *copy = NULL;
+  pthread_mutex_lock(&cmd->lock);
+  if (args.diff && cmd->diffOut) copy = strdup(cmd->diffOut);
+  else if (cmd->out && *cmd->out) copy = strdup(cmd->out);
+  else if (cmd->previousOut && *cmd->previousOut) copy = strdup(cmd->previousOut);
+  pthread_mutex_unlock(&cmd->lock);
+  return copy;
+}
+
 void print_json_result(int exit_code) {
   printf("{\"success\":%s,\"elapsed_ms\":%ld,\"commands\":[",
     exit_code == 0 ? "true" : "false", current_time_ms() - args.start_time);
@@ -536,7 +555,9 @@ void print_json_result(int exit_code) {
     printf(",\"command\":");
     print_json_string(c[i].command);
     printf(",\"status\":%d,\"output\":", c[i].status);
+    pthread_mutex_lock(&c[i].lock);
     print_json_string(c[i].previousOut);
+    pthread_mutex_unlock(&c[i].lock);
     printf("}");
   }
   printf("]}\n");
@@ -999,18 +1020,22 @@ int service() {
 
 void *shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
+  pthread_mutex_lock(&c->lock);
   c->outCap = CHUNK_SIZE;
   c->out = malloc(c->outCap);
   strcpy(c->out, "");
   c->previousOut = malloc(c->outCap);
   c->previousOut[0] = '\0';
   c->diffOut = NULL;
+  pthread_mutex_unlock(&c->lock);
 
   char buf[BUF_SIZE];
   wait_for_dependencies(c);
   while (1) {
+    pthread_mutex_lock(&c->lock);
     c->outPos = 0;
     strcpy(c->out, "");
+    pthread_mutex_unlock(&c->lock);
 
     // out of fds or processes (many commands): try again shortly
     int pipefd[2];
@@ -1075,6 +1100,7 @@ void *shell(void * arg) {
       ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
       if (n < 0 && errno == EINTR) continue;
       if (n <= 0) break;
+      pthread_mutex_lock(&c->lock);
       if (c->outPos + n + 1 > c->outCap) {
         c->outCap = (c->outPos + n + 1) * 2;
         c->out = realloc(c->out, c->outCap);
@@ -1083,10 +1109,12 @@ void *shell(void * arg) {
       memcpy(c->out + c->outPos, buf, n);
       c->outPos += n;
       c->out[c->outPos] = '\0';
+      pthread_mutex_unlock(&c->lock);
     }
 
-    if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
-    c->spinner--;
+    // one store, so the display never sees an out-of-range frame
+    int frame = c->spinner;
+    c->spinner = (frame <= 0 ? (int)(sizeof(spinner)/sizeof(spinner[0])) : frame) - 1;
     
     close(pipefd[0]);
     int status;
@@ -1104,6 +1132,7 @@ void *shell(void * arg) {
     }
 
     int changed = 0;
+    pthread_mutex_lock(&c->lock);
     if (c->runs > 0) {
       c->change = changed = strcmp(c->previousOut,c->out) != 0;
       
@@ -1118,6 +1147,7 @@ void *shell(void * arg) {
     c->runs++;
     // publish the change only once previousOut holds the new output
     if (changed) c->changes++;
+    pthread_mutex_unlock(&c->lock);
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     if (stop) {
@@ -1238,7 +1268,10 @@ int main(int argc, char *argv[]) {
 
   FILE *fp;
 
-  for(int i = 0; i <= args.nCommands; i++) c[i].status = -1;
+  for(int i = 0; i <= args.nCommands; i++) {
+    c[i].status = -1;
+    pthread_mutex_init(&c[i].lock, NULL);
+  }
   for(int i = 0; i <= args.nCommands; i++) pthread_create(&c[i].thread, NULL, shell, &c[i]);
 
   int not_done = 0;
@@ -1287,30 +1320,16 @@ int main(int argc, char *argv[]) {
             if (c[i].last_duration_ms < c[i].prev_duration_ms) time_color = "\033[32m";
             else if (c[i].last_duration_ms > c[i].prev_duration_ms) time_color = "\033[31m";
           }
-          sappendf(&display, &display_len, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[atomic_load(&c[i].spinner)], c[i].name ? c[i].name : c[i].command);
         }
         else if (args.lap)
-          sappendf(&display, &display_len, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[atomic_load(&c[i].spinner)], c[i].name ? c[i].name : c[i].command);
         else
-          sappendf(&display, &display_len, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "\033[0;3%dm%s\033[0m %s\n", color, spinner[atomic_load(&c[i].spinner)], c[i].name ? c[i].name : c[i].command);
         
         // Add output if available, or previous output if command has run before
         if (args.stdout) {
-          char *output_to_show = NULL;
-          
-          // If diff mode is enabled and we have diff output, use that
-          if (args.diff && c[i].diffOut) {
-            output_to_show = malloc(strlen(c[i].diffOut) + 1);
-            strcpy(output_to_show, c[i].diffOut);
-          } else if (c[i].out && strlen(c[i].out) > 0) {
-            // Use current output
-            output_to_show = malloc(strlen(c[i].out) + 1);
-            strcpy(output_to_show, c[i].out);
-          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0) {
-            // Use previous output if current is empty but we have previous
-            output_to_show = malloc(strlen(c[i].previousOut) + 1);
-            strcpy(output_to_show, c[i].previousOut);
-          }
+          char *output_to_show = output_snapshot(&c[i]);
           
           if (output_to_show) {
             int len = strlen(output_to_show);
@@ -1357,21 +1376,7 @@ int main(int argc, char *argv[]) {
         int has_output = 0;
         
         for(int i = 1; i <= args.nCommands; i++) {
-          char *output_to_show = NULL;
-          
-          // If diff mode is enabled and we have diff output, use that
-          if (args.diff && c[i].diffOut) {
-            output_to_show = malloc(strlen(c[i].diffOut) + 1);
-            strcpy(output_to_show, c[i].diffOut);
-          } else if (c[i].out && strlen(c[i].out) > 0) {
-            // Use current output
-            output_to_show = malloc(strlen(c[i].out) + 1);
-            strcpy(output_to_show, c[i].out);
-          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0) {
-            // Use previous output if current is empty but we have previous
-            output_to_show = malloc(strlen(c[i].previousOut) + 1);
-            strcpy(output_to_show, c[i].previousOut);
-          }
+          char *output_to_show = output_snapshot(&c[i]);
           
           if (output_to_show) {
             int len = strlen(output_to_show);
