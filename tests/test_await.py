@@ -1425,6 +1425,60 @@ class TestCoreLoopRegressions:
         assert returncode == 1
         assert 0.4 < elapsed < 1.5, f"-T 0.5 took {elapsed:.2f}s"
 
+
+class TestCmdTimeoutAndRetry:
+    def test_cmd_timeout_kills_everything_the_command_started(self):
+        """-t kills the whole command, not just the sh wrapper around it."""
+        marker = f"await-cmd-timeout-{os.getpid()}"
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -t 1 -r 1 "sh -c \'sleep 30; echo {marker}\'; true"',
+            timeout=5.0,
+            description="Should kill the command after 1s"
+        )
+        elapsed = time.time() - start
+        assert returncode == 1
+        assert 0.9 <= elapsed < 3, f"took {elapsed:.1f}s; expected one 1s attempt"
+        time.sleep(0.3)
+        leftover = subprocess.run(["pgrep", "-f", f"sleep 30; echo {marker}"], capture_output=True)
+        assert leftover.returncode != 0, "the timed-out command is still running"
+
+    def test_cmd_timeout_status_is_124(self):
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json -t 1 -r 1 "sleep 5"',
+            timeout=5.0,
+            description="A timed-out run reports 124, like timeout(1)"
+        )
+        assert returncode == 1
+        assert json.loads(stdout.strip())["commands"][0]["status"] == 124
+
+    def test_cmd_timeout_leaves_fast_commands_alone(self):
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-Vo -t 2 "sleep 0.2; echo ok"',
+            description="A command within its timeout succeeds normally"
+        )
+        assert returncode == 0
+        assert "ok" in stdout
+
+    def test_retry_counts_attempts_not_ticks(self):
+        """-r N gives up after N finished runs, even when each run is slow."""
+        counter = os.path.join(TMPDIR, f"await_retry_count_{os.getpid()}")
+        if os.path.exists(counter):
+            os.remove(counter)
+        try:
+            returncode, stdout, stderr = run_await_with_timeout(
+                f'-V -r 3 "sleep 0.5; echo x >> {counter}; false"',
+                timeout=6.0,
+                description="Should make exactly 3 attempts"
+            )
+            assert returncode == 1
+            with open(counter) as f:
+                assert len(f.readlines()) == 3
+        finally:
+            if os.path.exists(counter):
+                os.remove(counter)
+
 if __name__ == "__main__":
     # Make sure await binary exists
     if not os.path.exists("../await"):

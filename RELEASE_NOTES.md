@@ -9,6 +9,8 @@
 - **`--exec` runs once per trigger.** With `--forever` it was restarted every tick (`--change --forever --exec` ran the action 42 times in 3.5s); now it runs once per change, never overlapping. Its output is shown instead of swallowed.
 - **`--change` no longer fires on startup.** The first read is the baseline, not a change.
 - **Fractional seconds work** for `-i` / `-T` (`-i 0.5` used to become a busy loop).
+- **`--cmd-timeout` / `-t` works.** It only killed the `sh` wrapper, so `await -t 1 'sleep 5'` still waited 5s. Now the command and everything it started are killed, and the run reports status 124, like `timeout(1)`.
+- **`--retry` / `-r` counts attempts.** It counted 0.2s display ticks, so `-r 3` gave up after about 0.6s whether or not any command had finished. It now gives up after each command has run N times.
 - **No more crashes** on large output (>10KB with `-o`), long commands, or 10+ / 100+ commands. Many commands also start much faster (1000 commands: 22s → 1.5s).
 - **`--service` writes a working systemd unit**: all flags are kept (`--name`, `--json`, `--lap` were dropped) and arguments with quotes, `$` or `%` are escaped.
 - **`--json` is always valid JSON**, and `elapsed_ms` is measured even without `--timeout`.

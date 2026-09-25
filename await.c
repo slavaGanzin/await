@@ -17,6 +17,7 @@
 #include <sys/resource.h>
 #include <stdarg.h>
 #include <spawn.h>
+#include <poll.h>
 
 extern char **environ;
 
@@ -702,13 +703,13 @@ void help() {
   "  --fail -f\t\t#waiting commands to fail\n"
   "  --status -s\t\t#expected status [default: 0]\n"
   "  --any -a\t\t#terminate if any of command return expected status\n"
-  "  --change -c\t\t#waiting for stdout to change and ignore status codes\n"
+  "  --change -c\t\t#waiting for stdout to change (the first run is the baseline) and ignore status codes\n"
   "  --diff -d\t\t#highlight differences between previous and current output (like watch -d)\n"
-  "  --exec -e\t\t#run some shell command on success;\n"
+  "  --exec -e\t\t#run a shell command on success; await exits with its status\n"
   "  --interval -i\t\t#seconds between one round of commands [default: 0.2]\n"
   "  --timeout -T\t\t#seconds to wait before giving up [default: 0 (no timeout)]\n"
-  "  --cmd-timeout -t\t#seconds per command before killing it (wraps with timeout(1))\n"
-  "  --retry -r\t\t#max number of attempts before giving up [default: 0 (unlimited)]\n"
+  "  --cmd-timeout -t\t#seconds per command run before killing it and everything it started (status 124)\n"
+  "  --retry -r\t\t#max number of runs of each command before giving up [default: 0 (unlimited)]\n"
   "  --forever -F\t\t#do not exit ever\n"
   "  --name -n\t\t#label for the next command (shown in spinner, usable as \\name in --exec)\n"
   "  --json -j\t\t#output results as JSON on exit\n"
@@ -721,9 +722,12 @@ void help() {
   "  --autocomplete-bash\t#output bash shell autocomplete script\n"
   "  --autocomplete-zsh\t#output zsh shell autocomplete script\n"
   "\n\nNOTES:\n"
-  "# \\1, \\2 ... \\n - will be subtituted with n-th command stdout\n"
+  "# \\1, \\2 ... \\n - will be substituted with n-th command stdout (trailing newline trimmed)\n"
+  "# \\name - the same for a command labelled with --name\n"
+  "# the output is passed as data ($AWAIT_1, $AWAIT_2 ...), so it is never run as shell code\n"
   "# you can use stdout substitution in --exec and in commands itself:\n"
-  "  await 'echo -n 10' 'echo -n $RANDOM' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
+  "  await 'echo 10' 'date +%S' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
+  "# set NO_COLOR=1 to disable colors\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
@@ -1018,33 +1022,26 @@ void *shell(void * arg) {
     char *cmd = replace_placeholders(c->command);
     char **env = command_env();
     c->start_time = current_time_ms();
+    // posix_spawn doesn't copy our address space like fork() does; with
+    // many commands (many threads, many buffers) fork dominated the runtime
     pid_t child_pid;
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+    if (args.no_stderr)
+      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    // --cmd-timeout kills the command's whole process group: `sh -c` and
+    // everything it started, not just the shell
     if (args.cmd_timeout > 0) {
-      // the alarm must be armed inside the child, so this needs a real fork()
-      child_pid = fork();
-      if (child_pid == 0) {
-        dup2(pipefd[1], STDOUT_FILENO);
-        if (args.no_stderr) {
-          int devnull = open("/dev/null", O_WRONLY);
-          dup2(devnull, STDERR_FILENO);
-          close(devnull);
-        }
-        alarm(args.cmd_timeout);
-        execle("/bin/sh", "sh", "-c", cmd, NULL, env);
-        _exit(127);
-      }
-    } else {
-      // posix_spawn doesn't copy our address space like fork() does; with
-      // many commands (many threads, many buffers) fork dominated the runtime
-      posix_spawn_file_actions_t actions;
-      posix_spawn_file_actions_init(&actions);
-      posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-      if (args.no_stderr)
-        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-      char *argv[] = {"sh", "-c", cmd, NULL};
-      if (posix_spawn(&child_pid, "/bin/sh", &actions, NULL, argv, env) != 0) child_pid = -1;
-      posix_spawn_file_actions_destroy(&actions);
+      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+      posix_spawnattr_setpgroup(&attr, 0);
     }
+    char *argv[] = {"sh", "-c", cmd, NULL};
+    if (posix_spawn(&child_pid, "/bin/sh", &actions, &attr, argv, env) != 0) child_pid = -1;
+    posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&actions);
     free(cmd);
     free_command_env(env);
     if (child_pid < 0) {
@@ -1056,27 +1053,41 @@ void *shell(void * arg) {
     {
       // Parent process
       close(pipefd[1]); // Close write end
-      FILE *fp = fdopen(pipefd[0], "r");
       c->pid = child_pid;
 
-    while (fgets(buf, BUF_SIZE, fp) !=NULL) {
-      size_t n = strlen(buf);
+    long deadline = args.cmd_timeout > 0 ? c->start_time + args.cmd_timeout * 1000L : 0;
+    int timed_out = 0;
+    while (1) {
+      if (deadline) {
+        long left = deadline - current_time_ms();
+        struct pollfd pfd = {pipefd[0], POLLIN, 0};
+        if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
+          kill(-child_pid, SIGKILL);
+          timed_out = 1;
+          break;
+        }
+      }
+      ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) break;
       if (c->outPos + n + 1 > c->outCap) {
         c->outCap = (c->outPos + n + 1) * 2;
         c->out = realloc(c->out, c->outCap);
         c->previousOut = realloc(c->previousOut, c->outCap);
       }
-      memcpy(c->out + c->outPos, buf, n + 1);
+      memcpy(c->out + c->outPos, buf, n);
       c->outPos += n;
+      c->out[c->outPos] = '\0';
     }
 
     if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
     c->spinner--;
     
-    fclose(fp);
+    close(pipefd[0]);
     int status;
     waitpid(c->pid, &status, 0);
-    c->status = WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    // 124 like timeout(1)
+    c->status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
     if (c->status == 127 && !c->warned127) {
       c->warned127 = 1;
       fprintf(stderr, "\nawait: '%s' exited with 127 (command not found).\n"
@@ -1147,7 +1158,6 @@ int main(int argc, char *argv[]) {
   for(int i = 0; i <= args.nCommands; i++) pthread_create(&c[i].thread, NULL, shell, &c[i]);
 
   int not_done = 0;
-  int rounds = 0;
     // TODO: make a clear screen option
     // fprintf(stdout, "\033[2J\033[H");
     // fprintf(stderr, "\033[2J\033[H");
@@ -1370,7 +1380,10 @@ int main(int argc, char *argv[]) {
     }
 
     // Check retry limit
-    rounds++;
+    // --retry counts finished attempts: give up once every command has run that many times
+    int rounds = -1;
+    for (int i = 1; i <= args.nCommands; i++)
+      if (rounds < 0 || c[i].runs < rounds) rounds = c[i].runs;
     if (args.retry > 0 && rounds >= args.retry) {
       if (!args.silent) {
         fprintf(stderr, use_color() ? "\n\033[0;31mGiving up after %d attempts\033[0m\n" : "\nGiving up after %d attempts\n", rounds);
