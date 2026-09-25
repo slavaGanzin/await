@@ -35,7 +35,8 @@ def run_await_with_timeout(
     Returns:
         Tuple of (return_code, stdout, stderr)
     """
-    full_cmd = f"../await {cmd_args}"
+    # exec so a timeout kills await itself, not just the wrapping shell
+    full_cmd = f"exec ../await {cmd_args}"
     
     print(f"\n\033[96m🔍 Running:\033[0m \033[93m{full_cmd}\033[0m")
     if description:
@@ -420,15 +421,14 @@ class TestTimeoutFlag:
             returncode, stdout, stderr = run_await_with_timeout(
                 f'--timeout 2 --change --silent "cat {test_file}"',
                 timeout=3.0,
-                description="Should exit on first read (change from empty to content)"
+                description="Should time out: the first read is a baseline, not a change"
             )
             end_time = time.time()
 
-            # With --change, first read succeeds (change from nothing to content)
-            assert returncode == 0
+            # The first read is only the baseline; static content never changes
+            assert returncode == 1
             elapsed = end_time - start_time
-            # Should complete quickly on first read
-            assert elapsed < 2.0, f"Expected quick completion, got {elapsed:.2f}s"
+            assert 1.8 < elapsed < 3.0, f"Expected ~2s timeout, got {elapsed:.2f}s"
         finally:
             if os.path.exists(test_file):
                 os.remove(test_file)
@@ -528,7 +528,7 @@ echo $((count + 1)) > {counter_file}
 
             # Test with diff mode - should exit after a few iterations showing differences
             returncode, stdout, stderr = run_await_with_timeout(
-                f'--diff -fVo "{script_path}; false"',
+                f'--diff --change -Vo "{script_path}"',
                 timeout=3.0,
                 description="Should highlight changing numbers in JSON output"
             )
@@ -596,7 +596,7 @@ class TestPlaceholderSubstitution:
         """Test that \\1 placeholder works in commands."""
         # Placeholders work after first iteration, so use -Vo to see output
         returncode, stdout, stderr = run_await_with_timeout(
-            '-Vo "echo -n hello" "echo \\\\1"',
+            '-Vo "printf hello" "echo \\\\1"',
             timeout=3.0,
             description="Should substitute \\1 with output of first command"
         )
@@ -608,7 +608,7 @@ class TestPlaceholderSubstitution:
     def test_multiple_placeholders(self):
         """Test that multiple placeholders work (\\1, \\2)."""
         returncode, stdout, stderr = run_await_with_timeout(
-            '-Vo "echo -n foo" "echo -n bar" "echo \\\\1 \\\\2"',
+            '-Vo "printf foo" "printf bar" "echo \\\\1 \\\\2"',
             timeout=3.0,
             description="Should substitute \\1 and \\2 with respective command outputs"
         )
@@ -649,7 +649,7 @@ class TestPlaceholderSubstitution:
         # This test verifies the commands run and produce output, showing
         # the limitation of placeholder timing
         returncode, stdout, stderr = run_await_with_timeout(
-            '-Vo "echo -n 10" "echo -n 20" "echo \\\\1 \\\\2"',
+            '-Vo "printf 10" "printf 20" "echo \\\\1 \\\\2"',
             timeout=3.0,
             description="Should show placeholder substitution in action"
         )
@@ -959,7 +959,7 @@ echo $((count + 1)) > {counter_file}
                 f.write("5")
 
             returncode, stdout, stderr = run_await_with_timeout(
-                f'--diff -fVo "{script_path}; false"',
+                f'--diff --change -Vo "{script_path}"',
                 timeout=3.0,
                 description="Should handle unicode in diff mode"
             )
@@ -1195,6 +1195,132 @@ class TestName:
         data = json.loads(stdout.strip())
         assert data['commands'][0]['name'] == 'mydb'
 
+
+
+class TestCoreLoopRegressions:
+    """Regressions for placeholder indexing, exec, --change and fractional seconds."""
+
+    def test_placeholders_map_to_matching_command(self):
+        """\\1 and \\2 are the outputs of the 1st and 2nd commands, even in round one."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V "printf 10" "printf 5" "expr \\1 + \\2" --exec "echo got \\1 \\2 \\3"',
+            description="Should print 'got 10 5 15'"
+        )
+        assert returncode == 0
+        assert "got 10 5 15" in stdout
+
+    def test_placeholder_trims_trailing_newline(self):
+        """Like shell $(...), substituted output loses its trailing newline."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V "echo 7" --exec "echo [\\1]"',
+            description="Should print '[7]'"
+        )
+        assert returncode == 0
+        assert "[7]" in stdout
+
+    def test_named_placeholder(self):
+        """\\name refers to the command labelled with --name."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V --name greeting "printf hi" --exec "echo [\\greeting]"',
+            description="Should print '[hi]'"
+        )
+        assert returncode == 0
+        assert "[hi]" in stdout
+
+    def test_exec_output_is_printed(self):
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V "true" --exec "echo exec-output"',
+            description="Should show stdout of the --exec command"
+        )
+        assert returncode == 0
+        assert "exec-output" in stdout
+
+    def test_exec_exit_status_is_returned(self):
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V "true" --exec "exit 3"',
+            description="Should exit with the --exec command's status"
+        )
+        assert returncode == 3
+
+    def test_exec_runs_once_per_change(self):
+        """With --change --forever, exec fires once per change, not once per tick."""
+        log = os.path.join(TMPDIR, "await_exec_once_per_change")
+        if os.path.exists(log):
+            os.remove(log)
+        try:
+            run_await_with_timeout(
+                f'-V --change --forever "date +%s" --exec "echo x >> {log}"',
+                timeout=3.5,
+                description="Should run exec about once per second"
+            )
+            with open(log) as f:
+                runs = len(f.readlines())
+            assert 2 <= runs <= 4, f"exec ran {runs} times in 3.5s"
+        finally:
+            if os.path.exists(log):
+                os.remove(log)
+
+    def test_exec_output_keeps_json_valid(self):
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "true" --exec "echo ready"',
+            description="exec output goes to stderr so stdout stays one JSON document"
+        )
+        assert returncode == 0
+        assert json.loads(stdout.strip())["success"] is True
+        assert "ready" in stderr
+
+    def test_timeout_applies_while_exec_runs_forever(self):
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V --forever -T 1 "true" --exec "exec sleep 30 >/dev/null 2>&1"',
+            timeout=5.0,
+            description="Should time out after 1s even though exec is still running"
+        )
+        assert returncode == 1
+        assert time.time() - start < 3
+
+    def test_substituted_output_is_not_executed(self):
+        """Command output is data: $(...) in it must not run, in any quoting context,
+        including a placeholder nested inside "$(...)"."""
+        marker = os.path.join(TMPDIR, "await_injection_marker")
+        if os.path.exists(marker):
+            os.remove(marker)
+        payload_file = os.path.join(TMPDIR, "await_injection_payload")
+        with open(payload_file, "w") as f:
+            f.write(f"$(touch {marker}); `touch {marker}`; ' \" touch {marker}")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f"""-V "cat {payload_file}" --exec 'echo \\1; echo "\\1"; echo '"'"'\\1'"'"'; echo "$(echo \\1)"'""",
+            description="Should print the payload three times without running it"
+        )
+        os.remove(payload_file)
+        try:
+            assert returncode == 0
+            assert not os.path.exists(marker), "substituted output was executed"
+        finally:
+            if os.path.exists(marker):
+                os.remove(marker)
+
+    def test_fractional_interval(self):
+        """-i 0.5 means half a second, not zero."""
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V -i 0.5 -r 3 "false"',
+            description="Should take about a second for 3 attempts"
+        )
+        elapsed = time.time() - start
+        assert returncode == 1
+        assert elapsed >= 0.9, f"3 attempts at 0.5s interval took {elapsed:.2f}s"
+
+    def test_fractional_timeout(self):
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V -T 0.5 "false"',
+            description="Should time out after half a second"
+        )
+        elapsed = time.time() - start
+        assert returncode == 1
+        assert 0.4 < elapsed < 1.5, f"-T 0.5 took {elapsed:.2f}s"
 
 if __name__ == "__main__":
     # Make sure await binary exists
