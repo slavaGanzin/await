@@ -16,6 +16,9 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <stdarg.h>
+#include <spawn.h>
+
+extern char **environ;
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -344,18 +347,24 @@ long current_time_ms() {
     return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 }
 
+// new string (caller frees) with placeholders replaced
 char * replace_placeholders(char *string) {
+  string = strdup(string);
   for(int i = 0; i < args.nCommands; i = i + 1) {
     if (!c[i].previousOut) continue;
     char C[3];
     sprintf(C, "\\%d", i+1);
-    string = replace(C, c[i].previousOut, string);
+    char *next = replace(C, c[i].previousOut, string);
+    free(string);
+    string = next;
   }
   for(int i = 1; i <= args.nCommands; i++) {
     if (!c[i].previousOut || !c[i].name || c[i].name == c[i].command) continue;
     char named[256];
     snprintf(named, sizeof(named), "\\%s", c[i].name);
-    string = replace(named, c[i].previousOut, string);
+    char *next = replace(named, c[i].previousOut, string);
+    free(string);
+    string = next;
   }
   return string;
 }
@@ -832,34 +841,49 @@ void *shell(void * arg) {
       msleep(50);
       continue;
     }
+    // don't leak this pipe into commands other threads fork: the reader
+    // only sees EOF once every copy of the write end is closed
+    fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
 
+    // built before starting the child: malloc after fork() in a threaded process can deadlock
+    char *cmd = replace_placeholders(c->command);
     c->start_time = current_time_ms();
-    pid_t child_pid = fork();
+    pid_t child_pid;
+    if (args.cmd_timeout > 0) {
+      // the alarm must be armed inside the child, so this needs a real fork()
+      child_pid = fork();
+      if (child_pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        if (args.no_stderr) {
+          int devnull = open("/dev/null", O_WRONLY);
+          dup2(devnull, STDERR_FILENO);
+          close(devnull);
+        }
+        alarm(args.cmd_timeout);
+        execl("/bin/sh", "sh", "-c", cmd, NULL);
+        _exit(127);
+      }
+    } else {
+      // posix_spawn doesn't copy our address space like fork() does; with
+      // many commands (many threads, many buffers) fork dominated the runtime
+      posix_spawn_file_actions_t actions;
+      posix_spawn_file_actions_init(&actions);
+      posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+      if (args.no_stderr)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+      char *argv[] = {"sh", "-c", cmd, NULL};
+      if (posix_spawn(&child_pid, "/bin/sh", &actions, NULL, argv, environ) != 0) child_pid = -1;
+      posix_spawn_file_actions_destroy(&actions);
+    }
+    free(cmd);
     if (child_pid < 0) {
       close(pipefd[0]);
       close(pipefd[1]);
       msleep(50);
       continue;
     }
-    if (child_pid == 0) {
-      // Child process
-      close(pipefd[0]); // Close read end
-      dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
-      
-      if (args.no_stderr) {
-        // Redirect stderr to /dev/null
-        int devnull = open("/dev/null", O_WRONLY);
-        dup2(devnull, STDERR_FILENO);
-        close(devnull);
-      }
-      
-      close(pipefd[1]);
-      if (args.cmd_timeout > 0)
-        alarm(args.cmd_timeout);
-      char *cmd = replace_placeholders(c->command);
-      execl("/bin/sh", "sh", "-c", cmd, NULL);
-      exit(1);
-    } else {
+    {
       // Parent process
       close(pipefd[1]); // Close write end
       FILE *fp = fdopen(pipefd[0], "r");
