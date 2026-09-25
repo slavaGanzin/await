@@ -105,14 +105,14 @@ await \"stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/v
 
 ### [Substitute while substituting](https://memegenerator.net/img/instances/48173775.jpg)
 \`\`\`bash
-await 'echo -n 10' 'echo -n \$RANDOM' 'expr \1 + \2' --exec 'echo \3' --forever --silent
+await 'echo 10' 'date +%S' 'expr \1 + \2' --exec 'echo \3' --forever --silent
 \`\`\`
 
 <img src='demo/4.gif' width='100%'></img>
 
-### Furiously wait for new iPhone in background process
+### Furiously wait for new iPhone as a background service
 \`\`\`bash
-await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 1000 --change --daemon --exec 'ntfy send \"\1\"'
+await 'curl \"https://www.apple.com/iphone/\" -s | pup \".hero-eyebrow text{}\" | grep -v 12' --interval 1 --change --forever --exec 'ntfy send \"\1\"' --service iphone
 \`\`\`
 
 <img src='demo/5.gif' width='100%'></img>
@@ -127,7 +127,7 @@ sudo systemctl restart redis; await 'socat -u OPEN:/dev/null UNIX-CONNECT:/tmp/r
 ### Watch command output with diff highlighting
 \`\`\`bash
 # Like watch -d, highlight only the changing parts
-await 'date +%s' --diff --forever --stdout --silent --interval 1000
+await 'date +%s' --diff --forever --stdout --silent --interval 1
 
 # Monitor API responses and highlight changes 
 await 'curl -s https://api.example.com/status | jq .counter' --diff --forever --stdout --silent
@@ -151,7 +151,7 @@ await 'some-verbose-command' 'another-command' --no-stderr --stdout --silent
 await 'uptime' --watch
 
 # Monitor system resources with clean diff output
-await 'ps aux | head -10' --watch --interval 2000
+await 'ps aux | head -10' --watch --interval 2
 
 # Watch log file changes with highlighted differences
 await 'tail -5 /var/log/system.log' --watch
