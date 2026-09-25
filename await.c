@@ -363,19 +363,15 @@ static void buf_add(char **buf, size_t *len, size_t *cap, const char *s, size_t 
   (*buf)[*len] = '\0';
 }
 
-// append s escaped for where it lands in the shell command: inside '...',
-// inside "..." or unquoted, so command output is always data, never code
-static void buf_add_quoted(char **buf, size_t *len, size_t *cap, const char *s, char quote) {
-  if (!quote) buf_add(buf, len, cap, "'", 1);
-  for (const char *p = s; *p; p++) {
-    if (quote != '"' && *p == '\'') buf_add(buf, len, cap, "'\\''", 4);
-    else if (quote == '"' && strchr("$`\"\\", *p)) {
-      buf_add(buf, len, cap, "\\", 1);
-      buf_add(buf, len, cap, p, 1);
-    }
-    else buf_add(buf, len, cap, p, 1);
-  }
-  if (!quote) buf_add(buf, len, cap, "'", 1);
+// Placeholders become references to $AWAIT_<n>, whose value is passed in
+// the environment (command_env): the shell never parses a variable's value
+// as code, however the placeholder is nested ('...', "...", $(...)).
+static void buf_add_reference(char **buf, size_t *len, size_t *cap, int n, char quote) {
+  char ref[64];
+  if (quote == '"') snprintf(ref, sizeof(ref), "${AWAIT_%d}", n);
+  else if (quote == '\'') snprintf(ref, sizeof(ref), "'\"${AWAIT_%d}\"'", n);
+  else snprintf(ref, sizeof(ref), "\"${AWAIT_%d}\"", n);
+  buf_add(buf, len, cap, ref, strlen(ref));
 }
 
 // placeholder at p (\1, \2 ... or \name) -> its command, and its length
@@ -404,11 +400,11 @@ char * replace_placeholders(const char *string) {
   for (const char *p = string; *p; ) {
     if (*p == '\\') {
       size_t plen;
+      // \\1 means \1: a backslash left in front of the reference would escape its $
+      if (p[1] == '\\' && quote != '\'' && placeholder(p + 1, &plen)) p++;
       COMMAND *src = placeholder(p, &plen);
       if (src && src->runs && src->previousOut) {
-        char *value = substitution(src);
-        buf_add_quoted(&out, &len, &cap, value, quote);
-        free(value);
+        buf_add_reference(&out, &len, &cap, (int)(src - c), quote);
         p += plen;
         continue;
       }
@@ -424,6 +420,33 @@ char * replace_placeholders(const char *string) {
     p++;
   }
   return out;
+}
+
+extern char **environ;
+
+// environment for a command: ours plus AWAIT_<n>=<output of command n>
+char ** command_env() {
+  size_t n = 0;
+  while (environ[n]) n++;
+  char **env = malloc((n + args.nCommands + 1) * sizeof(char *));
+  size_t k = 0;
+  for (size_t i = 0; i < n; i++)
+    if (strncmp(environ[i], "AWAIT_", 6) != 0) env[k++] = environ[i];
+  for (int i = 1; i <= args.nCommands; i++) {
+    if (!c[i].runs || !c[i].previousOut) continue;
+    char *value = substitution(&c[i]);
+    env[k] = malloc(strlen(value) + 32);
+    sprintf(env[k++], "AWAIT_%d=%s", i, value);
+    free(value);
+  }
+  env[k] = NULL;
+  return env;
+}
+
+void free_command_env(char **env) {
+  for (char **e = env; *e; e++)
+    if (strncmp(*e, "AWAIT_", 6) == 0) free(*e);
+  free(env);
 }
 
 // does string contain placeholder \n (and not e.g. \n0)?
@@ -451,16 +474,18 @@ pid_t exec_pid = 0;  // running --exec, if any
 pid_t start_exec() {
   // build the command before fork: malloc in the child of a threaded process can deadlock
   char *cmd = replace_placeholders(args.exec);
+  char **env = command_env();
   fflush(stdout);
   fflush(stderr);
   pid_t pid = fork();
   if (pid == 0) {
     // keep stdout a single JSON document
     if (args.json) dup2(STDERR_FILENO, STDOUT_FILENO);
-    execl("/bin/sh", "sh", "-c", cmd, NULL);
+    execle("/bin/sh", "sh", "-c", cmd, NULL, env);
     _exit(127);
   }
   free(cmd);
+  free_command_env(env);
   if (pid < 0) perror("await: cannot run --exec");
   return pid;
 }
@@ -849,6 +874,7 @@ void *shell(void * arg) {
     strcpy(c->out, "");
 
     char *cmd = replace_placeholders(c->command);
+    char **env = command_env();
     int pipefd[2];
     pipe(pipefd);
 
@@ -869,11 +895,12 @@ void *shell(void * arg) {
       close(pipefd[1]);
       if (args.cmd_timeout > 0)
         alarm(args.cmd_timeout);
-      execl("/bin/sh", "sh", "-c", cmd, NULL);
+      execle("/bin/sh", "sh", "-c", cmd, NULL, env);
       exit(1);
     } else {
       // Parent process
       free(cmd);
+      free_command_env(env);
       close(pipefd[1]); // Close write end
       FILE *fp = fdopen(pipefd[0], "r");
       c->pid = child_pid;

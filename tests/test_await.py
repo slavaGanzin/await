@@ -1238,7 +1238,8 @@ class TestCoreLoopRegressions:
         assert time.time() - start < 3
 
     def test_substituted_output_is_not_executed(self):
-        """Command output is data: $(...) in it must not run, in any quoting context."""
+        """Command output is data: $(...) in it must not run, in any quoting context,
+        including a placeholder nested inside "$(...)"."""
         marker = os.path.join(TMPDIR, "await_injection_marker")
         if os.path.exists(marker):
             os.remove(marker)
@@ -1246,7 +1247,7 @@ class TestCoreLoopRegressions:
         with open(payload_file, "w") as f:
             f.write(f"$(touch {marker}); `touch {marker}`; ' \" touch {marker}")
         returncode, stdout, stderr = run_await_with_timeout(
-            f"""-V "cat {payload_file}" --exec 'echo \\1; echo "\\1"; echo '"'"'\\1'"'"''""",
+            f"""-V "cat {payload_file}" --exec 'echo \\1; echo "\\1"; echo '"'"'\\1'"'"'; echo "$(echo \\1)"'""",
             description="Should print the payload three times without running it"
         )
         os.remove(payload_file)
