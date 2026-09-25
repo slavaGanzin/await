@@ -686,6 +686,7 @@ void parse_args(int argc, char *argv[]) {
     int names_count = 0;
 
     args.args = malloc(1000);
+    args.args[0] = '\0';
 
     while (1) {
         static struct option long_options[] = {
@@ -865,6 +866,7 @@ void *shell(void * arg) {
   c->out = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
   c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  c->previousOut[0] = '\0';
   c->diffOut = NULL;
 
   char buf[BUF_SIZE];
