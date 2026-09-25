@@ -114,34 +114,27 @@ char* replace(const char* oldW, const char* newW, const char* s) {
 }
 
 void print_autocomplete_fish() {
-  printf("function __fish_await_no_subcommand\n"
-         "    set -l cmd (commandline -opc)\n"
-         "    for i in $cmd\n"
-         "        switch $i\n"
-         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --forever --service --watch\n"
-         "                return 1\n"
-         "        end\n"
-         "    end\n"
-         "    return 0\n"
-         "end\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l version -s v -d 'Print the version of await'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l help -d 'Print this help'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l stdout -s o -d 'Print stdout of commands'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l silent -s V -d 'Do not print spinners and commands'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l fail -s f -d 'Waiting commands to fail'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l status -s s -d 'Expected status [default: 0]' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l any -s a -d 'Terminate if any of command return expected status'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l diff -s d -d 'Highlight differences between previous and current output'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l exec -s e -d 'Run some shell command on success' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l interval -s i -d 'Seconds between one round of commands [default: 0.2]' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l timeout -s T -d 'Seconds to wait before giving up [default: 0]' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l cmd-timeout -s t -d 'Seconds per command before killing it' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l retry -s r -d 'Max number of attempts before giving up [default: 0 (unlimited)]' -r\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
-         "complete -c await -n '__fish_await_no_subcommand' -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
+  printf("complete -c await -l version -s v -d 'Print the version of await'\n"
+         "complete -c await -l help -d 'Print this help'\n"
+         "complete -c await -l stdout -s o -d 'Print stdout of commands'\n"
+         "complete -c await -l silent -s V -d 'Do not print spinners and commands'\n"
+         "complete -c await -l fail -s f -d 'Waiting commands to fail'\n"
+         "complete -c await -l status -s s -d 'Expected status [default: 0]' -r\n"
+         "complete -c await -l any -s a -d 'Terminate if any of command return expected status'\n"
+         "complete -c await -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
+         "complete -c await -l diff -s d -d 'Highlight differences between previous and current output'\n"
+         "complete -c await -l exec -s e -d 'Run some shell command on success' -r\n"
+         "complete -c await -l interval -s i -d 'Seconds between one round of commands [default: 0.2]' -r\n"
+         "complete -c await -l timeout -s T -d 'Seconds to wait before giving up [default: 0]' -r\n"
+         "complete -c await -l cmd-timeout -s t -d 'Seconds per command before killing it' -r\n"
+         "complete -c await -l retry -s r -d 'Max number of attempts before giving up [default: 0 (unlimited)]' -r\n"
+         "complete -c await -l forever -s F -d 'Do not exit ever'\n"
+         "complete -c await -l name -s n -d 'Label for the next command (usable as \\\\name in --exec)' -r\n"
+         "complete -c await -l json -s j -d 'Output results as JSON on exit'\n"
+         "complete -c await -l lap -s l -d 'Show last run duration per command in spinner'\n"
+         "complete -c await -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
+         "complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
+         "complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
          "\n"
          "# For command completion\n"
          "complete -c await -f -a '(__fish_complete_command)'\n");
@@ -154,11 +147,14 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --forever --service --version --no-stderr --watch\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap\"\n"
          "\n"
          "    case \"${prev}\" in\n"
-         "        --status|--exec|--interval|--timeout|--cmd-timeout)\n"
-         "            COMPREPLY=($(compgen -f -- \"${cur}\"))\n"
+         "        --exec)\n"
+         "            COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
+         "            return 0\n"
+         "            ;;\n"
+         "        --status|--interval|--timeout|--cmd-timeout|--retry|--name|--service)\n"
          "            return 0\n"
          "            ;;\n"
          "    esac\n"
@@ -189,17 +185,21 @@ void print_autocomplete_zsh() {
          "    '--no-stderr[Surpress stderr of commands by adding 2>/dev/null to commands]' \\\n"
          "    '--silent[Do not print spinners and commands]' \\\n"
          "    '--fail[Wait for commands to fail]' \\\n"
-         "    '--status[Expected status (default: 0)]::status' \\\n"
+         "    '--status[Expected status (default: 0)]:status:' \\\n"
          "    '--any[Terminate if any command returns expected status]' \\\n"
          "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
          "    '--diff[Highlight differences between previous and current output]' \\\n"
-         "    '--exec[Run some shell command on success]::command:_command_names' \\\n"
-         "    '--interval[Seconds between rounds of commands (default: 0.2)]::interval' \\\n"
-         "    '--timeout[Seconds to wait before giving up (default: 0)]::timeout' \\\n"
-         "    '--cmd-timeout[Seconds per command before killing it]::cmd-timeout' \\\n"
+         "    '--exec[Run some shell command on success]:command:_command_names' \\\n"
+         "    '--interval[Seconds between rounds of commands (default: 0.2)]:interval:' \\\n"
+         "    '--timeout[Seconds to wait before giving up (default: 0)]:timeout:' \\\n"
+         "    '--cmd-timeout[Seconds per command before killing it]:cmd-timeout:' \\\n"
+         "    '--retry[Max number of attempts before giving up (default: 0 = unlimited)]:retry:' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
+         "    '--name[Label for the next command]:name:' \\\n"
+         "    '--json[Output results as JSON on exit]' \\\n"
+         "    '--lap[Show last run duration per command in spinner]' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
-         "    '--service[Create systemd user service with same parameters and activate it]'\n"
+         "    '--service[Create systemd user service with same parameters and activate it]:service name:'\n"
          "}\n"
          "\n"
          "# Register the completion function\n"
@@ -269,7 +269,8 @@ void install_autocompletions() {
     snprintf(fish_file, sizeof(fish_file), "%s/await.fish", fish_dir);
     char cmd[PATH_MAX * 4];
     // Check if completions already exist, only append if not present
-    snprintf(cmd, sizeof(cmd), "mkdir -p '%s' 2>/dev/null && (grep -q '__fish_await' '%s' 2>/dev/null || '%s' --autocomplete-fish >> '%s' 2>/dev/null)", fish_dir, fish_file, binary_path, fish_file);
+    // await.fish belongs to us, so (re)write it instead of appending
+    snprintf(cmd, sizeof(cmd), "mkdir -p '%s' 2>/dev/null && '%s' --autocomplete-fish > '%s' 2>/dev/null", fish_dir, binary_path, fish_file);
     int ret = system(cmd);
     if (ret == 0) {
       printf("  → completions installed to ~/.config/fish/completions/await.fish\n");
@@ -537,6 +538,26 @@ void print_json_result(int exit_code) {
   printf("]}\n");
 }
 
+// https://no-color.org: NO_COLOR set and non-empty disables color
+int use_color() {
+  const char *no_color = getenv("NO_COLOR");
+  return !no_color || !*no_color;
+}
+
+// remove ANSI color codes (ESC [ ... m) in place
+void strip_colors(char *s) {
+  char *w = s;
+  for (char *r = s; *r; r++) {
+    if (r[0] == '\033' && r[1] == '[') {
+      char *e = r + 2;
+      while ((*e >= '0' && *e <= '9') || *e == ';') e++;
+      if (*e == 'm') { r = e; continue; }
+    }
+    *w++ = *r;
+  }
+  *w = '\0';
+}
+
 // capacity of a sappendf string of length len: the next power of two
 static size_t sappendf_cap(size_t len) {
   size_t cap = 1;
@@ -567,6 +588,7 @@ void sappendf(char **s, size_t *len, const char *fmt, ...) {
 }
 
 char * colorize_comments(char *string) {
+  if (!use_color() || !isatty(STDOUT_FILENO)) return string;
   string = replace("#", "\033[33m#", string);
   string = replace("\n", "\033[0m\n", string);
   return string;
@@ -1210,6 +1232,7 @@ int main(int argc, char *argv[]) {
       }
       
       // Print the entire display at once
+      if (!use_color()) strip_colors(display);
       fprintf(stderr, "%s", display);
       fflush(stderr);
       
@@ -1274,6 +1297,7 @@ int main(int argc, char *argv[]) {
         }
         
         // Print the silent display
+        if (!use_color()) strip_colors(silent_display);
         if (has_output) {
           if (first_output) {
             printf("%s", silent_display);
@@ -1316,7 +1340,7 @@ int main(int argc, char *argv[]) {
       }
 
       if (!args.forever) {
-        if (!args.silent) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+        if (!args.silent && isatty(STDERR_FILENO)) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
         if (args.json) print_json_result(exec_status);
         return exec_status;
       }
@@ -1327,7 +1351,7 @@ int main(int argc, char *argv[]) {
       long elapsed = current_time_ms() - args.start_time;
       if (elapsed >= args.timeout) {
         if (!args.silent) {
-          fprintf(stderr, "\n\033[0;31mTimeout reached after %ld ms\033[0m\n", elapsed);
+          fprintf(stderr, use_color() ? "\n\033[0;31mTimeout reached after %ld ms\033[0m\n" : "\nTimeout reached after %ld ms\n", elapsed);
           for (int i = 1; i <= args.nCommands; i++) {
             if (c[i].status == -1) {
               fprintf(stderr, "  '%s': still running / no completed attempt\n", c[i].command);
@@ -1349,7 +1373,7 @@ int main(int argc, char *argv[]) {
     rounds++;
     if (args.retry > 0 && rounds >= args.retry) {
       if (!args.silent) {
-        fprintf(stderr, "\n\033[0;31mGiving up after %d attempts\033[0m\n", rounds);
+        fprintf(stderr, use_color() ? "\n\033[0;31mGiving up after %d attempts\033[0m\n" : "\nGiving up after %d attempts\n", rounds);
       }
       if (args.json) print_json_result(1);
       return 1;
