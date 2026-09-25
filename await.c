@@ -353,24 +353,77 @@ char * substitution(COMMAND *cmd) {
   return out;
 }
 
-char * replace_placeholders(char *string) {
-  for(int i = args.nCommands; i >= 1; i--) {
-    if (!c[i].previousOut || !c[i].runs) continue;
-    char C[16];
-    sprintf(C, "\\%d", i);
-    char *out = substitution(&c[i]);
-    string = replace(C, out, string);
-    free(out);
+static void buf_add(char **buf, size_t *len, size_t *cap, const char *s, size_t n) {
+  if (*len + n + 1 > *cap) {
+    *cap = (*len + n + 1) * 2;
+    *buf = realloc(*buf, *cap);
   }
-  for(int i = 1; i <= args.nCommands; i++) {
-    if (!c[i].previousOut || !c[i].runs || !c[i].name || c[i].name == c[i].command) continue;
-    char named[256];
-    snprintf(named, sizeof(named), "\\%s", c[i].name);
-    char *out = substitution(&c[i]);
-    string = replace(named, out, string);
-    free(out);
+  memcpy(*buf + *len, s, n);
+  *len += n;
+  (*buf)[*len] = '\0';
+}
+
+// append s escaped for where it lands in the shell command: inside '...',
+// inside "..." or unquoted, so command output is always data, never code
+static void buf_add_quoted(char **buf, size_t *len, size_t *cap, const char *s, char quote) {
+  if (!quote) buf_add(buf, len, cap, "'", 1);
+  for (const char *p = s; *p; p++) {
+    if (quote != '"' && *p == '\'') buf_add(buf, len, cap, "'\\''", 4);
+    else if (quote == '"' && strchr("$`\"\\", *p)) {
+      buf_add(buf, len, cap, "\\", 1);
+      buf_add(buf, len, cap, p, 1);
+    }
+    else buf_add(buf, len, cap, p, 1);
   }
-  return string;
+  if (!quote) buf_add(buf, len, cap, "'", 1);
+}
+
+// placeholder at p (\1, \2 ... or \name) -> its command, and its length
+static COMMAND *placeholder(const char *p, size_t *plen) {
+  COMMAND *found = NULL;
+  *plen = 0;
+  int n = 0;
+  for (size_t j = 1; p[j] >= '0' && p[j] <= '9' && j < 9; j++) {
+    n = n * 10 + (p[j] - '0');
+    if (n >= 1 && n <= args.nCommands) { found = &c[n]; *plen = j + 1; }
+  }
+  for (int i = 1; i <= args.nCommands; i++) {
+    if (!c[i].name || c[i].name == c[i].command) continue;
+    size_t l = strlen(c[i].name);
+    if (l + 1 > *plen && strncmp(p + 1, c[i].name, l) == 0) { found = &c[i]; *plen = l + 1; }
+  }
+  return found;
+}
+
+// new string with \1, \2 ... and \name replaced by the commands' last output
+char * replace_placeholders(const char *string) {
+  char *out = NULL;
+  size_t len = 0, cap = 0;
+  char quote = 0;
+  buf_add(&out, &len, &cap, "", 0);
+  for (const char *p = string; *p; ) {
+    if (*p == '\\') {
+      size_t plen;
+      COMMAND *src = placeholder(p, &plen);
+      if (src && src->runs && src->previousOut) {
+        char *value = substitution(src);
+        buf_add_quoted(&out, &len, &cap, value, quote);
+        free(value);
+        p += plen;
+        continue;
+      }
+      // not a placeholder: outside '...' an escaped quote doesn't open or close one
+      size_t n = (quote != '\'' && p[1] && strchr("'\"`$", p[1])) ? 2 : 1;
+      buf_add(&out, &len, &cap, p, n);
+      p += n;
+      continue;
+    }
+    if (*p == '\'' && quote != '"') quote = quote ? 0 : '\'';
+    else if (*p == '"' && quote != '\'') quote = quote ? 0 : '"';
+    buf_add(&out, &len, &cap, p, 1);
+    p++;
+  }
+  return out;
 }
 
 // does string contain placeholder \n (and not e.g. \n0)?
@@ -393,16 +446,30 @@ void wait_for_dependencies(COMMAND *cmd) {
   }
 }
 
-int run_exec() {
+pid_t exec_pid = 0;  // running --exec, if any
+
+pid_t start_exec() {
+  // build the command before fork: malloc in the child of a threaded process can deadlock
+  char *cmd = replace_placeholders(args.exec);
   fflush(stdout);
   fflush(stderr);
   pid_t pid = fork();
   if (pid == 0) {
-    execl("/bin/sh", "sh", "-c", replace_placeholders(args.exec), NULL);
+    // keep stdout a single JSON document
+    if (args.json) dup2(STDERR_FILENO, STDOUT_FILENO);
+    execl("/bin/sh", "sh", "-c", cmd, NULL);
     _exit(127);
   }
+  free(cmd);
+  if (pid < 0) perror("await: cannot run --exec");
+  return pid;
+}
+
+int wait_exec(pid_t pid) {
+  if (pid < 0) return 1;
   int status;
-  waitpid(pid, &status, 0);
+  while (waitpid(pid, &status, 0) < 0)
+    if (errno != EINTR) return 1;
   return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
 }
 
@@ -781,6 +848,7 @@ void *shell(void * arg) {
     c->outPos = 0;
     strcpy(c->out, "");
 
+    char *cmd = replace_placeholders(c->command);
     int pipefd[2];
     pipe(pipefd);
 
@@ -801,11 +869,11 @@ void *shell(void * arg) {
       close(pipefd[1]);
       if (args.cmd_timeout > 0)
         alarm(args.cmd_timeout);
-      char *cmd = replace_placeholders(c->command);
       execl("/bin/sh", "sh", "-c", cmd, NULL);
       exit(1);
     } else {
       // Parent process
+      free(cmd);
       close(pipefd[1]); // Close write end
       FILE *fp = fdopen(pipefd[0], "r");
       c->pid = child_pid;
@@ -837,9 +905,9 @@ void *shell(void * arg) {
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
+    int changed = 0;
     if (c->runs > 0) {
-      c->change = strcmp(c->previousOut,c->out) != 0;
-      if (c->change) c->changes++;
+      c->change = changed = strcmp(c->previousOut,c->out) != 0;
       
       // Compute differences if diff mode is enabled
       if (args.diff && c->change) {
@@ -850,6 +918,8 @@ void *shell(void * arg) {
 
     strcpy(c->previousOut, c->out);
     c->runs++;
+    // publish the change only once previousOut holds the new output
+    if (changed) c->changes++;
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     if (stop) {
@@ -1062,13 +1132,19 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    if (not_done == 0 || args.any && not_done < args.nCommands) {
+    // reap an --exec started by an earlier trigger (--forever)
+    if (exec_pid > 0 && waitpid(exec_pid, NULL, WNOHANG) != 0) exec_pid = 0;
+
+    // with --forever, a trigger during a running --exec waits for it to finish
+    if ((not_done == 0 || args.any && not_done < args.nCommands) && !exec_pid) {
       // act on each change only once
       for (int i = 1; i <= args.nCommands; i++) c[i].seenChanges = c[i].changes;
 
       int exec_status = 0;
       if (args.exec) {
-        exec_status = run_exec();
+        exec_pid = start_exec();
+        if (!args.forever) exec_status = wait_exec(exec_pid);
+        else if (exec_pid < 0) exec_pid = 0;
         // exec output was printed below the display; start redrawing from here
         free(last_display);
         last_display = NULL;

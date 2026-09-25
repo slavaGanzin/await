@@ -1217,6 +1217,46 @@ class TestCoreLoopRegressions:
             if os.path.exists(log):
                 os.remove(log)
 
+    def test_exec_output_keeps_json_valid(self):
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "true" --exec "echo ready"',
+            description="exec output goes to stderr so stdout stays one JSON document"
+        )
+        assert returncode == 0
+        assert json.loads(stdout.strip())["success"] is True
+        assert "ready" in stderr
+
+    def test_timeout_applies_while_exec_runs_forever(self):
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V --forever -T 1 "true" --exec "exec sleep 30 >/dev/null 2>&1"',
+            timeout=5.0,
+            description="Should time out after 1s even though exec is still running"
+        )
+        assert returncode == 1
+        assert time.time() - start < 3
+
+    def test_substituted_output_is_not_executed(self):
+        """Command output is data: $(...) in it must not run, in any quoting context."""
+        marker = os.path.join(TMPDIR, "await_injection_marker")
+        if os.path.exists(marker):
+            os.remove(marker)
+        payload_file = os.path.join(TMPDIR, "await_injection_payload")
+        with open(payload_file, "w") as f:
+            f.write(f"$(touch {marker}); `touch {marker}`; ' \" touch {marker}")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f"""-V "cat {payload_file}" --exec 'echo \\1; echo "\\1"; echo '"'"'\\1'"'"''""",
+            description="Should print the payload three times without running it"
+        )
+        os.remove(payload_file)
+        try:
+            assert returncode == 0
+            assert not os.path.exists(marker), "substituted output was executed"
+        finally:
+            if os.path.exists(marker):
+                os.remove(marker)
+
     def test_fractional_interval(self):
         """-i 0.5 means half a second, not zero."""
         start = time.time()
