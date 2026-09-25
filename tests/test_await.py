@@ -1185,6 +1185,30 @@ class TestJson:
         assert 'elapsed_ms' in data
 
 
+    def test_json_escapes_all_fields(self):
+        """Quotes in names/commands and control chars in output must stay valid JSON."""
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            """--json --name 'my "db"' 'printf "q\\"x\\t\\001"'""",
+            description="Should emit valid JSON"
+        )
+        assert returncode == 0
+        data = json.loads(stdout.strip())
+        cmd = data['commands'][0]
+        assert cmd['name'] == 'my "db"'
+        assert cmd['command'] == 'printf "q\\"x\\t\\001"'
+        assert cmd['output'] == 'q"x\t\x01'
+
+    def test_json_elapsed_without_timeout(self):
+        import json
+        returncode, stdout, stderr = run_await_with_timeout(
+            '--json "sleep 0.3"',
+            description="elapsed_ms should be measured even without --timeout"
+        )
+        assert returncode == 0
+        assert json.loads(stdout.strip())['elapsed_ms'] >= 300
+
+
 class TestName:
     def test_name_shown_in_spinner(self):
         """--name label replaces command in spinner output."""

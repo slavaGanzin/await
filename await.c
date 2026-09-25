@@ -507,24 +507,32 @@ int not_done_cmd(int i) {
   return c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
 }
 
+void print_json_string(const char *s) {
+  putchar('"');
+  for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+    if (*p == '"') printf("\\\"");
+    else if (*p == '\\') printf("\\\\");
+    else if (*p == '\n') printf("\\n");
+    else if (*p == '\r') printf("\\r");
+    else if (*p == '\t') printf("\\t");
+    else if (*p < 0x20) printf("\\u%04x", *p);
+    else putchar(*p);
+  }
+  putchar('"');
+}
+
 void print_json_result(int exit_code) {
-  long elapsed = args.timeout > 0 ? current_time_ms() - args.start_time : 0;
   printf("{\"success\":%s,\"elapsed_ms\":%ld,\"commands\":[",
-    exit_code == 0 ? "true" : "false", elapsed);
+    exit_code == 0 ? "true" : "false", current_time_ms() - args.start_time);
   for (int i = 1; i <= args.nCommands; i++) {
     if (i > 1) printf(",");
-    char *out = c[i].previousOut ? c[i].previousOut : "";
-    // escape quotes in output
-    printf("{\"name\":\"%s\",\"command\":\"%s\",\"status\":%d,\"output\":\"",
-      c[i].name ? c[i].name : "", c[i].command, c[i].status);
-    for (char *p = out; *p; p++) {
-      if (*p == '"') printf("\\\"");
-      else if (*p == '\\') printf("\\\\");
-      else if (*p == '\n') printf("\\n");
-      else if (*p == '\r') printf("\\r");
-      else putchar(*p);
-    }
-    printf("\"}");
+    printf("{\"name\":");
+    print_json_string(c[i].name);
+    printf(",\"command\":");
+    print_json_string(c[i].command);
+    printf(",\"status\":%d,\"output\":", c[i].status);
+    print_json_string(c[i].previousOut);
+    printf("}");
   }
   printf("]}\n");
 }
@@ -1128,10 +1136,8 @@ int main(int argc, char *argv[]) {
   static char *last_display = NULL;
   static char *last_silent_output = NULL;
 
-  // Initialize start time for timeout
-  if (args.timeout > 0) {
-    args.start_time = current_time_ms();
-  }
+  // Start time for --timeout and --json elapsed_ms
+  args.start_time = current_time_ms();
 
   while (1) {
     not_done = 0;
