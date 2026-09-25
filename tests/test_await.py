@@ -1016,8 +1016,7 @@ class TestAutocompletion:
         )
         assert returncode == 0
         assert 'complete -c await' in stdout
-        assert '__fish_await_no_subcommand' in stdout
-        assert 'function __fish_await_no_subcommand' in stdout
+        assert 'complete -c await -l stdout -s o' in stdout
 
     def test_autocomplete_bash(self):
         """Test bash autocompletion script generation."""
@@ -1052,6 +1051,23 @@ class TestAutocompletion:
         flag = "-l {}" if shell == "fish" else "--{}"
         missing = sorted(o for o in options if not re.search(re.escape(flag.format(o)) + r"\b", script))
         assert not missing, f"{shell} completions missing: {missing}"
+
+
+    def test_bash_completion_behaviour(self):
+        script = subprocess.run(["../await", "--autocomplete-bash"], capture_output=True, text=True).stdout
+        def complete(*words):
+            probe = (script + "\nCOMP_WORDS=(" + " ".join(f"'{w}'" for w in words) + ")\n"
+                     f"COMP_CWORD={len(words) - 1}\n_await\nprintf '%s\\n' \"${{COMPREPLY[@]}}\"\n")
+            return subprocess.run(["bash", "-c", probe], capture_output=True, text=True).stdout.split()
+        assert complete("await", "--retry", "") == []          # a number, not a filename
+        assert "--lap" in complete("await", "--json", "--")    # flags after flags
+
+    @pytest.mark.skipif(not __import__("shutil").which("fish"), reason="fish not installed")
+    def test_fish_completion_after_a_flag(self):
+        script = subprocess.run(["../await", "--autocomplete-fish"], capture_output=True, text=True).stdout
+        result = subprocess.run(["fish", "-c", "source; complete -C'await --json --'"],
+                                input=script, capture_output=True, text=True)
+        assert "--lap" in result.stdout
 
 
 class TestNoColor:

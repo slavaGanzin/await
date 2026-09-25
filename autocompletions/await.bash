@@ -7,8 +7,11 @@ _await() {
     opts="--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap"
 
     case "${prev}" in
-        --status|--exec|--interval|--timeout|--cmd-timeout|--retry|--name|--service)
-            COMPREPLY=($(compgen -f -- "${cur}"))
+        --exec)
+            COMPREPLY=($(compgen -c -- "${cur}"))
+            return 0
+            ;;
+        --status|--interval|--timeout|--cmd-timeout|--retry|--name|--service)
             return 0
             ;;
     esac
