@@ -14,6 +14,11 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/resource.h>
+#include <stdarg.h>
+#include <spawn.h>
+
+extern char **environ;
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -25,6 +30,7 @@ typedef struct {
   char *previousOut;
   char *diffOut;  // For storing difference-highlighted output
   size_t outPos;
+  size_t outCap;
   int status;
   int change;
   int warned127;
@@ -38,7 +44,7 @@ typedef struct {
   int seenChanges;       // changes already acted on by the main loop
 } COMMAND;
 
-COMMAND c[100];
+COMMAND *c;
 
 typedef struct {
   int expectedStatus;
@@ -423,8 +429,6 @@ char * replace_placeholders(const char *string) {
   return out;
 }
 
-extern char **environ;
-
 // environment for a command: ours plus AWAIT_<n>=<output of command n>
 char ** command_env() {
   size_t n = 0;
@@ -546,6 +550,35 @@ void strip_colors(char *s) {
   *w = '\0';
 }
 
+// capacity of a sappendf string of length len: the next power of two
+static size_t sappendf_cap(size_t len) {
+  size_t cap = 1;
+  while (cap < len + 1) cap *= 2;
+  return cap;
+}
+
+// printf onto the end of a heap string of length *len (from strdup("")), growing it geometrically
+void sappendf(char **s, size_t *len, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(NULL, 0, fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  size_t cap = sappendf_cap(*len + n);
+  if (cap > sappendf_cap(*len)) {
+    char *grown = realloc(*s, cap);
+    if (!grown) {
+      perror("await");
+      exit(1);
+    }
+    *s = grown;
+  }
+  va_start(ap, fmt);
+  vsnprintf(*s + *len, n + 1, fmt, ap);
+  va_end(ap);
+  *len += n;
+}
+
 char * colorize_comments(char *string) {
   if (!use_color() || !isatty(STDOUT_FILENO)) return string;
   string = replace("#", "\033[33m#", string);
@@ -561,7 +594,7 @@ char * highlight_differences(const char *old_text, const char *new_text) {
   int new_len = strlen(new_text);
   
   // Allocate enough space for highlighted text (worst case: every char highlighted)
-  char *highlighted = malloc(new_len * 10); // Generous space for ANSI codes
+  char *highlighted = malloc(new_len * 10 + 1); // worst case: every char wrapped in ANSI codes
   highlighted[0] = '\0';
   
   int old_pos = 0, new_pos = 0;
@@ -747,7 +780,8 @@ void args_append_quoted(const char *s) {
 
 void parse_args(int argc, char *argv[]) {
     int getopt;
-    char *names[100] = {NULL};
+    char **names = calloc(argc, sizeof(char *));
+    c = calloc(argc + 1, sizeof(COMMAND));
     int names_count = 0;
 
     args.args = NULL;
@@ -948,9 +982,10 @@ int service() {
 
 void *shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
-  c->out = malloc(CHUNK_SIZE * sizeof(char));
+  c->outCap = CHUNK_SIZE;
+  c->out = malloc(c->outCap);
   strcpy(c->out, "");
-  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  c->previousOut = malloc(c->outCap);
   c->previousOut[0] = '\0';
   c->diffOut = NULL;
 
@@ -960,46 +995,71 @@ void *shell(void * arg) {
     c->outPos = 0;
     strcpy(c->out, "");
 
+    // out of fds or processes (many commands): try again shortly
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+      msleep(50);
+      continue;
+    }
+    // don't leak this pipe into commands other threads fork: the reader
+    // only sees EOF once every copy of the write end is closed
+    fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+
+    // built before starting the child: malloc after fork() in a threaded process can deadlock
     char *cmd = replace_placeholders(c->command);
     char **env = command_env();
-    int pipefd[2];
-    pipe(pipefd);
-
     c->start_time = current_time_ms();
-    pid_t child_pid = fork();
-    if (child_pid == 0) {
-      // Child process
-      close(pipefd[0]); // Close read end
-      dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
-      
-      if (args.no_stderr) {
-        // Redirect stderr to /dev/null
-        int devnull = open("/dev/null", O_WRONLY);
-        dup2(devnull, STDERR_FILENO);
-        close(devnull);
-      }
-      
-      close(pipefd[1]);
-      if (args.cmd_timeout > 0)
+    pid_t child_pid;
+    if (args.cmd_timeout > 0) {
+      // the alarm must be armed inside the child, so this needs a real fork()
+      child_pid = fork();
+      if (child_pid == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        if (args.no_stderr) {
+          int devnull = open("/dev/null", O_WRONLY);
+          dup2(devnull, STDERR_FILENO);
+          close(devnull);
+        }
         alarm(args.cmd_timeout);
-      execle("/bin/sh", "sh", "-c", cmd, NULL, env);
-      exit(1);
+        execle("/bin/sh", "sh", "-c", cmd, NULL, env);
+        _exit(127);
+      }
     } else {
+      // posix_spawn doesn't copy our address space like fork() does; with
+      // many commands (many threads, many buffers) fork dominated the runtime
+      posix_spawn_file_actions_t actions;
+      posix_spawn_file_actions_init(&actions);
+      posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+      if (args.no_stderr)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+      char *argv[] = {"sh", "-c", cmd, NULL};
+      if (posix_spawn(&child_pid, "/bin/sh", &actions, NULL, argv, env) != 0) child_pid = -1;
+      posix_spawn_file_actions_destroy(&actions);
+    }
+    free(cmd);
+    free_command_env(env);
+    if (child_pid < 0) {
+      close(pipefd[0]);
+      close(pipefd[1]);
+      msleep(50);
+      continue;
+    }
+    {
       // Parent process
-      free(cmd);
-      free_command_env(env);
       close(pipefd[1]); // Close write end
       FILE *fp = fdopen(pipefd[0], "r");
       c->pid = child_pid;
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
-      c->outPos += BUF_SIZE;
-
-      if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
-        c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
-        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+      size_t n = strlen(buf);
+      if (c->outPos + n + 1 > c->outCap) {
+        c->outCap = (c->outPos + n + 1) * 2;
+        c->out = realloc(c->out, c->outCap);
+        c->previousOut = realloc(c->previousOut, c->outCap);
       }
-      sprintf(c->out, "%s%s", c->out, buf);
+      memcpy(c->out + c->outPos, buf, n + 1);
+      c->outPos += n;
     }
 
     if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
@@ -1060,6 +1120,13 @@ int main(int argc, char *argv[]) {
   // sigaction(SIGINT, &sa, NULL);
 
   parse_args(argc, argv);
+
+  // every running command holds a pipe; macOS defaults to 256 open files
+  struct rlimit nofile;
+  if (getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur < nofile.rlim_max) {
+    nofile.rlim_cur = nofile.rlim_max == RLIM_INFINITY || nofile.rlim_max > 10240 ? 10240 : nofile.rlim_max;
+    setrlimit(RLIMIT_NOFILE, &nofile);
+  }
   if (args.service) return service();
 
   // Ensure the program does not ignore signals when running in a script
@@ -1107,27 +1174,25 @@ int main(int argc, char *argv[]) {
       }
       
       // Build the entire display string first
-      char *display = malloc(10000); // Large buffer for display
-      strcpy(display, "");
+      char *display = strdup("");
+      size_t display_len = 0;
       
       for(int i = 1; i <= args.nCommands; i++) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         
         // Add status line
-        char status_line[1000];
         if (args.lap && c[i].last_duration_ms > 0) {
           const char *time_color = "\033[2m";
           if (c[i].prev_duration_ms > 0) {
             if (c[i].last_duration_ms < c[i].prev_duration_ms) time_color = "\033[32m";
             else if (c[i].last_duration_ms > c[i].prev_duration_ms) time_color = "\033[31m";
           }
-          sprintf(status_line, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         }
         else if (args.lap)
-          sprintf(status_line, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         else
-          sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
-        strcat(display, status_line);
+          sappendf(&display, &display_len, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         
         // Add output if available, or previous output if command has run before
         if (args.stdout) {
@@ -1152,8 +1217,7 @@ int main(int argc, char *argv[]) {
             if (len > 0 && output_to_show[len - 1] == '\n') {
                 output_to_show[len - 1] = '\0';
             }
-            strcat(display, output_to_show);
-            strcat(display, "\n");
+            sappendf(&display, &display_len, "%s\n", output_to_show);
             free(output_to_show);
           }
         }
@@ -1188,8 +1252,8 @@ int main(int argc, char *argv[]) {
         }
         
         // Build silent output display
-        char *silent_display = malloc(10000);
-        strcpy(silent_display, "");
+        char *silent_display = strdup("");
+        size_t silent_display_len = 0;
         int has_output = 0;
         
         for(int i = 1; i <= args.nCommands; i++) {
@@ -1216,9 +1280,9 @@ int main(int argc, char *argv[]) {
             }
             
             if (has_output) {
-              strcat(silent_display, "\n");
+              sappendf(&silent_display, &silent_display_len, "\n");
             }
-            strcat(silent_display, output_to_show);
+            sappendf(&silent_display, &silent_display_len, "%s", output_to_show);
             has_output = 1;
             free(output_to_show);
           }
