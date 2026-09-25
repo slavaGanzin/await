@@ -835,6 +835,42 @@ class TestNoStderrFlag:
         assert returncode == 0
 
 
+class TestLargeInputs:
+    """Inputs that overflowed fixed-size buffers."""
+
+    def test_large_output_with_spinner(self):
+        returncode, stdout, stderr = run_await_with_timeout('-o "seq 5000"', timeout=5.0)
+        assert returncode == 0
+        # 4999 only appears in the output, not in the "seq 5000" status line
+        assert "4999" in stderr
+
+    def test_large_output_silent(self):
+        returncode, stdout, stderr = run_await_with_timeout('-Vo "seq 200000"', timeout=5.0)
+        assert returncode == 0
+        assert "200000" in stdout
+
+    def test_long_command(self):
+        long_arg = "x" * 2000
+        returncode, stdout, stderr = run_await_with_timeout(f'"echo {long_arg}"', timeout=5.0)
+        assert returncode == 0
+
+    def test_many_commands(self):
+        start = time.time()
+        try:
+            result = subprocess.run(["../await"] + ["true"] * 150,
+                                    capture_output=True, timeout=30)
+            returncode, stderr = result.returncode, result.stderr
+        except subprocess.TimeoutExpired as e:
+            returncode, stderr = "timeout", e.stderr or b""
+        elapsed = time.time() - start
+        # spinner colour per command in the last frame: 37 pending, 32 done, 31 failed
+        last = stderr.decode(errors="replace").split("\x1b[J")[-1]
+        states = {k: last.count(f"\x1b[0;{k}m") for k in ("37", "32", "31")}
+        diagnosis = f"rc={returncode} after {elapsed:.1f}s, last frame pending/done/failed={states}"
+        assert returncode == 0, diagnosis
+        assert elapsed < 5, diagnosis
+
+
 class TestWatchFlag:
     """Test --watch / -w flag functionality."""
 

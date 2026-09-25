@@ -104,8 +104,8 @@ jobs:
         cp build-x86_64/await.fish macos-latest-x86_64/
         cp build-x86_64/await.bash macos-latest-x86_64/
         cp build-x86_64/await.zsh macos-latest-x86_64/
-        # Copy x86_64 binary to project root for tests on macOS
-        cp build-x86_64/await ./await
+        # Test the build native to this runner (arm64 on Apple Silicon), not one run under Rosetta
+        cp build-$(uname -m)/await ./await
 
     - name: Install test dependencies
       working-directory: tests
