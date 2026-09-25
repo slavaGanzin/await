@@ -169,11 +169,14 @@ jobs:
       run: |
         VERSION=${{ steps.get_version.outputs.VERSION }}
 
-        # Latest version tag before this one. Only version-like tags count (there
+        # The version tag just below this one. Only version-like tags count (there
         # are stray ones like "list"), compared numerically with or without a "v"
-        # prefix: --sort=-v:refname puts the old v1.x tags ahead of 2.x.
-        PREV_TAG=$(git tag -l | grep -E '^v?[0-9]+(\.[0-9]+)*$' | grep -vx "$VERSION" \
-          | awk '{t=$0; sub(/^v/,"",t); print t" "$0}' | sort -V -k1,1 | tail -n1 | cut -d' ' -f2)
+        # prefix (--sort=-v:refname puts the old v1.x tags ahead of 2.x); tags
+        # newer than this release are ignored.
+        PREV_TAG=$( { git tag -l | grep -E '^v?[0-9]+(\.[0-9]+)*$' | grep -vx "$VERSION" \
+                        | awk '{t=$0; sub(/^v/,"",t); print t" "$0}'
+                      echo "$VERSION ." ; } \
+          | sort -V -k1,1 | awk '$2=="." {print prev; exit} {prev=$2}')
 
         if [ -z "$PREV_TAG" ]; then
           echo "No previous tag found, using initial commit"
