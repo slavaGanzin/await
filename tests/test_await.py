@@ -1042,6 +1042,33 @@ class TestAutocompletion:
         assert '_arguments' in stdout
 
 
+    @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
+    def test_completions_cover_all_long_options(self, shell):
+        """Every long option in --help is offered by each shell's completions."""
+        help_text = subprocess.run(["../await", "--help"], capture_output=True, text=True).stdout
+        options = set(re.findall(r"^\s+--([a-z-]+)", help_text, re.M))
+        options -= {"autocompletions", "autocomplete-fish", "autocomplete-bash", "autocomplete-zsh"}
+        script = subprocess.run(["../await", f"--autocomplete-{shell}"], capture_output=True, text=True).stdout
+        flag = "-l {}" if shell == "fish" else "--{}"
+        missing = sorted(o for o in options if not re.search(re.escape(flag.format(o)) + r"\b", script))
+        assert not missing, f"{shell} completions missing: {missing}"
+
+
+class TestNoColor:
+    def test_help_not_colored_when_piped(self):
+        returncode, stdout, stderr = run_await_with_timeout("--help")
+        assert "\033[" not in stdout
+
+    def test_no_color_env_strips_colors(self):
+        result = subprocess.run(
+            ["../await", "-o", "-r", "2", "echo hi", "false"],
+            env={**os.environ, "NO_COLOR": "1"}, capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 1
+        assert "hi" in result.stderr
+        assert not re.search(r"\x1b\[[0-9;]*m", result.stderr)
+
+
 class TestJson:
     def test_json_output_success(self):
         """--json emits valid JSON on success."""

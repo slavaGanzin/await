@@ -110,7 +110,7 @@ void print_autocomplete_fish() {
          "    set -l cmd (commandline -opc)\n"
          "    for i in $cmd\n"
          "        switch $i\n"
-         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --forever --service --watch\n"
+         "            case --help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --watch --name --json --lap\n"
          "                return 1\n"
          "        end\n"
          "    end\n"
@@ -131,6 +131,9 @@ void print_autocomplete_fish() {
          "complete -c await -n '__fish_await_no_subcommand' -l cmd-timeout -s t -d 'Seconds per command before killing it' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l retry -s r -d 'Max number of attempts before giving up [default: 0 (unlimited)]' -r\n"
          "complete -c await -n '__fish_await_no_subcommand' -l forever -s F -d 'Do not exit ever'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l name -s n -d 'Label for the next command (usable as \\\\name in --exec)' -r\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l json -s j -d 'Output results as JSON on exit'\n"
+         "complete -c await -n '__fish_await_no_subcommand' -l lap -s l -d 'Show last run duration per command in spinner'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
          "complete -c await -n '__fish_await_no_subcommand' -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
@@ -146,10 +149,10 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --forever --service --version --no-stderr --watch\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap\"\n"
          "\n"
          "    case \"${prev}\" in\n"
-         "        --status|--exec|--interval|--timeout|--cmd-timeout)\n"
+         "        --status|--exec|--interval|--timeout|--cmd-timeout|--retry|--name|--service)\n"
          "            COMPREPLY=($(compgen -f -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
@@ -189,7 +192,11 @@ void print_autocomplete_zsh() {
          "    '--interval[Seconds between rounds of commands (default: 0.2)]::interval' \\\n"
          "    '--timeout[Seconds to wait before giving up (default: 0)]::timeout' \\\n"
          "    '--cmd-timeout[Seconds per command before killing it]::cmd-timeout' \\\n"
+         "    '--retry[Max number of attempts before giving up (default: 0 = unlimited)]::retry' \\\n"
          "    '--forever[Do not exit ever]' \\\n"
+         "    '--name[Label for the next command]::name' \\\n"
+         "    '--json[Output results as JSON on exit]' \\\n"
+         "    '--lap[Show last run duration per command in spinner]' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]'\n"
          "}\n"
@@ -379,7 +386,28 @@ void print_json_result(int exit_code) {
   printf("]}\n");
 }
 
+// https://no-color.org: NO_COLOR set and non-empty disables color
+int use_color() {
+  const char *no_color = getenv("NO_COLOR");
+  return !no_color || !*no_color;
+}
+
+// remove ANSI color codes (ESC [ ... m) in place
+void strip_colors(char *s) {
+  char *w = s;
+  for (char *r = s; *r; r++) {
+    if (r[0] == '\033' && r[1] == '[') {
+      char *e = r + 2;
+      while ((*e >= '0' && *e <= '9') || *e == ';') e++;
+      if (*e == 'm') { r = e; continue; }
+    }
+    *w++ = *r;
+  }
+  *w = '\0';
+}
+
 char * colorize_comments(char *string) {
+  if (!use_color() || !isatty(STDOUT_FILENO)) return string;
   string = replace("#", "\033[33m#", string);
   string = replace("\n", "\033[0m\n", string);
   return string;
@@ -927,6 +955,7 @@ int main(int argc, char *argv[]) {
       }
       
       // Print the entire display at once
+      if (!use_color()) strip_colors(display);
       fprintf(stderr, "%s", display);
       fflush(stderr);
       
@@ -992,6 +1021,7 @@ int main(int argc, char *argv[]) {
         }
         
         // Print the silent display
+        if (!use_color()) strip_colors(silent_display);
         if (has_output) {
           if (first_output) {
             printf("%s", silent_display);
@@ -1022,13 +1052,13 @@ int main(int argc, char *argv[]) {
 
       if (!args.forever) {
         if (!args.exec) {
-          fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+          if (isatty(STDERR_FILENO)) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
           if (args.json) print_json_result(0);
           return 0;
         }
         while (1) {
           if (exec.spinner == 0) {
-            fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+            if (isatty(STDERR_FILENO)) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
             if (args.json) print_json_result(0);
             return 0;
           }
@@ -1042,7 +1072,7 @@ int main(int argc, char *argv[]) {
       long elapsed = current_time_ms() - args.start_time;
       if (elapsed >= args.timeout) {
         if (!args.silent) {
-          fprintf(stderr, "\n\033[0;31mTimeout reached after %ld ms\033[0m\n", elapsed);
+          fprintf(stderr, use_color() ? "\n\033[0;31mTimeout reached after %ld ms\033[0m\n" : "\nTimeout reached after %ld ms\n", elapsed);
           for (int i = 1; i <= args.nCommands; i++) {
             if (c[i].status == -1) {
               fprintf(stderr, "  '%s': still running / no completed attempt\n", c[i].command);
@@ -1064,7 +1094,7 @@ int main(int argc, char *argv[]) {
     rounds++;
     if (args.retry > 0 && rounds >= args.retry) {
       if (!args.silent) {
-        fprintf(stderr, "\n\033[0;31mGiving up after %d attempts\033[0m\n", rounds);
+        fprintf(stderr, use_color() ? "\n\033[0;31mGiving up after %d attempts\033[0m\n" : "\nGiving up after %d attempts\n", rounds);
       }
       if (args.json) print_json_result(1);
       return 1;
