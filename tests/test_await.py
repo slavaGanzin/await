@@ -596,7 +596,7 @@ class TestPlaceholderSubstitution:
         """Test that \\1 placeholder works in commands."""
         # Placeholders work after first iteration, so use -Vo to see output
         returncode, stdout, stderr = run_await_with_timeout(
-            '-Vo "echo -n hello" "echo \\\\1"',
+            '-Vo "printf hello" "echo \\\\1"',
             timeout=3.0,
             description="Should substitute \\1 with output of first command"
         )
@@ -608,7 +608,7 @@ class TestPlaceholderSubstitution:
     def test_multiple_placeholders(self):
         """Test that multiple placeholders work (\\1, \\2)."""
         returncode, stdout, stderr = run_await_with_timeout(
-            '-Vo "echo -n foo" "echo -n bar" "echo \\\\1 \\\\2"',
+            '-Vo "printf foo" "printf bar" "echo \\\\1 \\\\2"',
             timeout=3.0,
             description="Should substitute \\1 and \\2 with respective command outputs"
         )
@@ -649,7 +649,7 @@ class TestPlaceholderSubstitution:
         # This test verifies the commands run and produce output, showing
         # the limitation of placeholder timing
         returncode, stdout, stderr = run_await_with_timeout(
-            '-Vo "echo -n 10" "echo -n 20" "echo \\\\1 \\\\2"',
+            '-Vo "printf 10" "printf 20" "echo \\\\1 \\\\2"',
             timeout=3.0,
             description="Should show placeholder substitution in action"
         )
@@ -1160,16 +1160,25 @@ class TestCoreLoopRegressions:
     def test_placeholders_map_to_matching_command(self):
         """\\1 and \\2 are the outputs of the 1st and 2nd commands, even in round one."""
         returncode, stdout, stderr = run_await_with_timeout(
-            '-V "echo -n 10" "echo -n 5" "expr \\1 + \\2" --exec "echo got \\1 \\2 \\3"',
+            '-V "printf 10" "printf 5" "expr \\1 + \\2" --exec "echo got \\1 \\2 \\3"',
             description="Should print 'got 10 5 15'"
         )
         assert returncode == 0
         assert "got 10 5 15" in stdout
 
+    def test_placeholder_trims_trailing_newline(self):
+        """Like shell $(...), substituted output loses its trailing newline."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V "echo 7" --exec "echo [\\1]"',
+            description="Should print '[7]'"
+        )
+        assert returncode == 0
+        assert "[7]" in stdout
+
     def test_named_placeholder(self):
         """\\name refers to the command labelled with --name."""
         returncode, stdout, stderr = run_await_with_timeout(
-            '-V --name greeting "echo -n hi" --exec "echo [\\greeting]"',
+            '-V --name greeting "printf hi" --exec "echo [\\greeting]"',
             description="Should print '[hi]'"
         )
         assert returncode == 0

@@ -345,18 +345,30 @@ long current_time_ms() {
     return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 }
 
+// command output without trailing newlines, like shell $(...)
+char * substitution(COMMAND *cmd) {
+  char *out = strdup(cmd->previousOut);
+  size_t len = strlen(out);
+  while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r')) out[--len] = '\0';
+  return out;
+}
+
 char * replace_placeholders(char *string) {
   for(int i = args.nCommands; i >= 1; i--) {
     if (!c[i].previousOut || !c[i].runs) continue;
     char C[16];
     sprintf(C, "\\%d", i);
-    string = replace(C, c[i].previousOut, string);
+    char *out = substitution(&c[i]);
+    string = replace(C, out, string);
+    free(out);
   }
   for(int i = 1; i <= args.nCommands; i++) {
-    if (!c[i].previousOut || !c[i].name || c[i].name == c[i].command) continue;
+    if (!c[i].previousOut || !c[i].runs || !c[i].name || c[i].name == c[i].command) continue;
     char named[256];
     snprintf(named, sizeof(named), "\\%s", c[i].name);
-    string = replace(named, c[i].previousOut, string);
+    char *out = substitution(&c[i]);
+    string = replace(named, out, string);
+    free(out);
   }
   return string;
 }
