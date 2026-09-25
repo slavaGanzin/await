@@ -680,13 +680,56 @@ int looks_like_bare_url(const char *s) {
   return strpbrk(s, " \t|&;<>()$`\\\"'") == NULL;
 }
 
+// append to args.args (the command line replayed by --service), growing it as needed
+void args_append(const char *s) {
+  static size_t len = 0, cap = 0;
+  size_t n = strlen(s);
+  if (len + n + 1 > cap) {
+    size_t new_cap = (len + n + 1) * 2;
+    char *grown = realloc(len ? args.args : NULL, new_cap);
+    if (!grown) {
+      perror("await");
+      exit(1);
+    }
+    args.args = grown;
+    cap = new_cap;
+  }
+  memcpy(args.args + len, s, n + 1);
+  len += n;
+}
+
+// s as a double-quoted systemd ExecStart argument (new string)
+char * systemd_quote(const char *s) {
+  char *q = malloc(strlen(s) * 2 + 3), *w = q;
+  if (!q) {
+    perror("await");
+    exit(1);
+  }
+  *w++ = '"';
+  for (const char *p = s; *p; p++) {
+    if (*p == '\\' || *p == '"') { *w++ = '\\'; *w++ = *p; }
+    else if (*p == '$' || *p == '%') { *w++ = *p; *w++ = *p; }
+    else if (*p == '\n') { *w++ = '\\'; *w++ = 'n'; }
+    else *w++ = *p;
+  }
+  *w++ = '"';
+  *w = '\0';
+  return q;
+}
+
+void args_append_quoted(const char *s) {
+  char *q = systemd_quote(s);
+  args_append(q);
+  free(q);
+}
+
 void parse_args(int argc, char *argv[]) {
     int getopt;
     char *names[100] = {NULL};
     int names_count = 0;
 
-    args.args = malloc(1000);
-    args.args[0] = '\0';
+    args.args = NULL;
+    args_append("");
 
     while (1) {
         static struct option long_options[] = {
@@ -725,17 +768,17 @@ void parse_args(int argc, char *argv[]) {
           break;
 
         if (getopt != 'S') {
-          strcat(args.args, "--");
-          for (int i =0; i<18; i++) {
-            if (long_options[i].val == getopt)
-              strcat(args.args, long_options[i].name);
+          for (int i = 0; long_options[i].name; i++) {
+            if (long_options[i].val != getopt) continue;
+            args_append("--");
+            args_append(long_options[i].name);
+            if (long_options[i].has_arg) {
+              args_append(" ");
+              args_append_quoted(optarg);
+            }
+            args_append(" ");
+            break;
           }
-          if (optarg) {
-            strcat(args.args, " \"");
-            strcat(args.args, optarg);
-            strcat(args.args, "\"");
-          }
-          strcat(args.args, " ");
         }
 
         switch (getopt) {
@@ -816,9 +859,8 @@ void parse_args(int argc, char *argv[]) {
           "         await 'curl -sf %s'\n",
           argv[optind], argv[optind]);
       }
-      strcat(args.args, " \"");
-      strcat(args.args, argv[optind]);
-      strcat(args.args, "\"");
+      args_append(" ");
+      args_append_quoted(argv[optind]);
       c[++args.nCommands].command = argv[optind];
       c[args.nCommands].name = (args.nCommands <= names_count && names[args.nCommands-1]) ? names[args.nCommands-1] : argv[optind];
       optind++;
@@ -838,10 +880,31 @@ int service() {
   char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
   char cwd[PATH_MAX];
   getcwd(cwd, sizeof(cwd));
-  char binary[BUFSIZ];
-  readlink("/proc/self/exe", binary, BUFSIZ);
+  char binary[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", binary, sizeof(binary) - 1);
+  if (len < 0) {
+    fprintf(stderr, "await: --service needs /proc/self/exe (Linux with systemd)\n");
+    return 1;
+  }
+  binary[len] = '\0';
 
+  // mkdir -p without a shell, so any HOME works
+  char *dir = replace("HOME", home, "HOME/.config/systemd/user");
+  for (char *p = dir + 1; *p; p++) {
+    if (*p != '/') continue;
+    *p = '\0';
+    mkdir(dir, 0755);
+    *p = '/';
+  }
+  mkdir(dir, 0755);
   fp = fopen(f, "w");
+  if (!fp) {
+    fprintf(stderr, "await: cannot write %s: %s\n", f, strerror(errno));
+    return 1;
+  }
+  char *quoted_binary = systemd_quote(binary);
+  char *exec_start = malloc(strlen(quoted_binary) + strlen(args.args) + 2);
+  sprintf(exec_start, "%s %s", quoted_binary, args.args);
   fprintf(fp,
     "[Unit]\n"\
     "Description=await %s\n"\
@@ -854,7 +917,7 @@ int service() {
     "Restart=always\n"\
     "[Install]\n"\
     "WantedBy=default.target\n"
-   , args.args, cwd, replace("ARGS", args.args, replace("BINARY", binary, "BINARY ARGS")));
+   , args.args, replace("%", "%%", cwd), exec_start);
   fclose(fp);
 
   system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
