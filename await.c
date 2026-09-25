@@ -536,12 +536,40 @@ int looks_like_bare_url(const char *s) {
   return strpbrk(s, " \t|&;<>()$`\\\"'") == NULL;
 }
 
+// append to args.args (the command line replayed by --service), growing it as needed
+void args_append(const char *s) {
+  static size_t cap = 0;
+  size_t len = args.args ? strlen(args.args) : 0;
+  if (len + strlen(s) + 1 > cap) {
+    cap = (len + strlen(s) + 1) * 2;
+    args.args = realloc(len ? args.args : NULL, cap);
+    if (!len) args.args[0] = '\0';
+  }
+  strcat(args.args, s);
+}
+
+// append s as a double-quoted systemd ExecStart argument
+void args_append_quoted(const char *s) {
+  args_append("\"");
+  for (const char *p = s; *p; p++) {
+    char ch[2] = {*p, 0};
+    if (*p == '\\') args_append("\\\\");
+    else if (*p == '"') args_append("\\\"");
+    else if (*p == '$') args_append("$$");
+    else if (*p == '%') args_append("%%");
+    else if (*p == '\n') args_append("\\n");
+    else args_append(ch);
+  }
+  args_append("\"");
+}
+
 void parse_args(int argc, char *argv[]) {
     int getopt;
     char *names[100] = {NULL};
     int names_count = 0;
 
-    args.args = malloc(1000);
+    args.args = NULL;
+    args_append("");
 
     while (1) {
         static struct option long_options[] = {
@@ -580,17 +608,17 @@ void parse_args(int argc, char *argv[]) {
           break;
 
         if (getopt != 'S') {
-          strcat(args.args, "--");
-          for (int i =0; i<18; i++) {
-            if (long_options[i].val == getopt)
-              strcat(args.args, long_options[i].name);
+          for (int i = 0; long_options[i].name; i++) {
+            if (long_options[i].val != getopt) continue;
+            args_append("--");
+            args_append(long_options[i].name);
+            if (long_options[i].has_arg) {
+              args_append(" ");
+              args_append_quoted(optarg);
+            }
+            args_append(" ");
+            break;
           }
-          if (optarg) {
-            strcat(args.args, " \"");
-            strcat(args.args, optarg);
-            strcat(args.args, "\"");
-          }
-          strcat(args.args, " ");
         }
 
         switch (getopt) {
@@ -671,9 +699,8 @@ void parse_args(int argc, char *argv[]) {
           "         await 'curl -sf %s'\n",
           argv[optind], argv[optind]);
       }
-      strcat(args.args, " \"");
-      strcat(args.args, argv[optind]);
-      strcat(args.args, "\"");
+      args_append(" ");
+      args_append_quoted(argv[optind]);
       c[++args.nCommands].command = argv[optind];
       c[args.nCommands].name = (args.nCommands <= names_count && names[args.nCommands-1]) ? names[args.nCommands-1] : argv[optind];
       optind++;
@@ -693,10 +720,21 @@ int service() {
   char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
   char cwd[PATH_MAX];
   getcwd(cwd, sizeof(cwd));
-  char binary[BUFSIZ];
-  readlink("/proc/self/exe", binary, BUFSIZ);
+  char binary[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", binary, sizeof(binary) - 1);
+  if (len < 0) {
+    fprintf(stderr, "await: --service needs /proc/self/exe (Linux with systemd)\n");
+    return 1;
+  }
+  binary[len] = '\0';
 
+  char *dir = replace("HOME", home, "HOME/.config/systemd/user");
+  system(replace("DIR", dir, "mkdir -p 'DIR'"));
   fp = fopen(f, "w");
+  if (!fp) {
+    fprintf(stderr, "await: cannot write %s: %s\n", f, strerror(errno));
+    return 1;
+  }
   fprintf(fp,
     "[Unit]\n"\
     "Description=await %s\n"\

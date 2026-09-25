@@ -766,6 +766,36 @@ class TestExecFlag:
         # but the command should complete successfully
 
 
+@pytest.mark.skipif(platform.system() != "Linux", reason="--service is Linux/systemd only")
+class TestService:
+    """--service writes a systemd unit that replays the full command line."""
+
+    def test_service_unit_keeps_all_flags_and_escapes(self):
+        home = tempfile.mkdtemp()
+        bindir = os.path.join(home, "bin")
+        os.mkdir(bindir)
+        for stub in ("systemctl", "journalctl"):
+            path = os.path.join(bindir, stub)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(path, 0o755)
+
+        result = subprocess.run(
+            ["../await", "--name", "web", "--json", "--lap", "-i", "0.5",
+             'curl -sf "http://x/$HOME" | grep 100%', "--service", "t"],
+            env={**os.environ, "HOME": home, "PATH": bindir + ":" + os.environ["PATH"]},
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+        with open(os.path.join(home, ".config/systemd/user/t.service")) as f:
+            unit = f.read()
+        exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
+        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"'):
+            assert flag in exec_start
+        # systemd expands $ and % and ends the argument at an unescaped quote
+        assert '"curl -sf \\"http://x/$$HOME\\" | grep 100%%"' in exec_start
+
+
 class TestNoStderrFlag:
     """Test --no-stderr / -E flag functionality."""
 
