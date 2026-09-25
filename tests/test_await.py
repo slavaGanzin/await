@@ -1596,11 +1596,55 @@ class TestUpdateNotifier:
             assert returncode == 0
             assert elapsed < 2, f"await waited {elapsed:.1f}s for the update check"
         finally:
-            fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK) if os.path.exists(fifo) else None
+            # the detached fetch may not have opened the FIFO yet (ENXIO): retry briefly
+            fd, deadline = None, time.time() + 5
+            while fd is None and time.time() < deadline:
+                try:
+                    fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:
+                    time.sleep(0.05)
             if fd is not None:
                 os.write(fd, b'{"tag_name": "99.0.0"}\n')
                 os.close(fd)
         assert self.wait_for_cache("99.0.0")
+
+    def test_check_does_not_keep_callers_pipes_open(self):
+        """The detached fetch must not inherit extra descriptors: a caller waiting
+        for EOF on a pipe it passed to await gets it when await exits."""
+        os.mkfifo(self.release)          # the fetch blocks on this
+        read_end, write_end = os.pipe()  # an extra inheritable descriptor
+        os.set_inheritable(write_end, True)
+        try:
+            import pty
+            master, slave = pty.openpty()
+            proc = subprocess.Popen(["../await", "true"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=slave, pass_fds=(write_end,), env={**os.environ, **self.env})
+            os.close(slave)
+            proc.wait(timeout=5)
+            os.close(write_end)
+            os.set_blocking(read_end, False)
+            deadline = time.time() + 2
+            while True:
+                try:
+                    eof = os.read(read_end, 1) == b""
+                except BlockingIOError:
+                    eof = False
+                if eof or time.time() > deadline:
+                    break
+                time.sleep(0.05)
+            os.close(master)
+            assert eof, "the background check kept the caller's pipe open"
+        finally:
+            os.close(read_end)
+            fd, deadline = None, time.time() + 5
+            while fd is None and time.time() < deadline:
+                try:
+                    fd = os.open(self.release, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:
+                    time.sleep(0.05)
+            if fd is not None:
+                os.write(fd, b'{"tag_name": "1.0.0"}\n')
+                os.close(fd)
 
     def test_no_check_when_not_interactive(self):
         self.publish("99.0.0")
@@ -1620,6 +1664,27 @@ class TestUpdateNotifier:
         self.cached("99.0.0")
         _, err, _ = run_with_tty_stderr(["-V", "true"], self.env)
         assert "available" not in err
+
+
+class TestPublishOrder:
+    def test_exec_always_sees_the_output_that_triggered_it(self):
+        """Status becomes visible only together with the run's output, so
+        --exec never runs with a missing or stale \\1 (repeated to catch timing)."""
+        for _ in range(10):
+            returncode, stdout, stderr = run_await_with_timeout(
+                '-V "echo hi" --exec "echo [\\1]"',
+                description="Should print [hi]"
+            )
+            assert returncode == 0
+            assert "[hi]" in stdout, stdout
+
+    def test_json_status_and_output_match(self):
+        import json
+        for _ in range(10):
+            returncode, stdout, stderr = run_await_with_timeout('--json "echo done"')
+            command = json.loads(stdout.strip())["commands"][0]
+            assert command["status"] == 0
+            assert command["output"] == "done\n"
 
 if __name__ == "__main__":
     # Make sure await binary exists

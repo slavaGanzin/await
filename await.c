@@ -1030,6 +1030,7 @@ void *shell(void * arg) {
   pthread_mutex_unlock(&c->lock);
 
   char buf[BUF_SIZE];
+  int run_status = -1;
   wait_for_dependencies(c);
   while (1) {
     pthread_mutex_lock(&c->lock);
@@ -1085,6 +1086,7 @@ void *shell(void * arg) {
       close(pipefd[1]); // Close write end
       c->pid = child_pid;
 
+    run_status = -1;
     long deadline = args.cmd_timeout > 0 ? c->start_time + args.cmd_timeout * 1000L : 0;
     int timed_out = 0;
     while (1) {
@@ -1119,9 +1121,9 @@ void *shell(void * arg) {
     close(pipefd[0]);
     int status;
     waitpid(c->pid, &status, 0);
-    // 124 like timeout(1)
-    c->status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
-    if (c->status == 127 && !c->warned127) {
+    // 124 like timeout(1); published below together with the output
+    run_status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    if (run_status == 127 && !c->warned127) {
       c->warned127 = 1;
       fprintf(stderr, "\nawait: '%s' exited with 127 (command not found).\n"
                        "       Check for a typo, or that it's installed and on PATH.\n",
@@ -1131,21 +1133,22 @@ void *shell(void * arg) {
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
-    int changed = 0;
-    pthread_mutex_lock(&c->lock);
-    if (c->runs > 0) {
-      c->change = changed = strcmp(c->previousOut,c->out) != 0;
-      
-      // Compute differences if diff mode is enabled
-      if (args.diff && c->change) {
-        if (c->diffOut) free(c->diffOut);
-        c->diffOut = highlight_differences(c->previousOut, c->out);
-      }
-    }
+    // out/previousOut are only written by this thread, so comparing and
+    // diffing them needs no lock; the lock only covers publishing
+    int changed = c->runs > 0 && strcmp(c->previousOut, c->out) != 0;
+    char *diff = changed && args.diff ? highlight_differences(c->previousOut, c->out) : NULL;
 
+    pthread_mutex_lock(&c->lock);
+    c->change = changed;
+    if (diff) {
+      free(c->diffOut);
+      c->diffOut = diff;
+    }
     strcpy(c->previousOut, c->out);
+    // publish status, run and change only once previousOut holds this run's
+    // output, so whoever acts on them (--exec, --json, \1) sees that output
+    c->status = run_status;
     c->runs++;
-    // publish the change only once previousOut holds the new output
     if (changed) c->changes++;
     pthread_mutex_unlock(&c->lock);
 
@@ -1217,7 +1220,7 @@ void update_check() {
     "if command -v curl >/dev/null; then body=$(curl -fsSL --max-time 10 \"$3\"); "
     "else body=$(wget -qO- -T 10 \"$3\"); fi; "
     "tag=$(printf '%s\\n' \"$body\" | sed -n 's/.*\"tag_name\": *\"\\([^\"]*\\)\".*/\\1/p' | head -n1); "
-    "[ -n \"$tag\" ] && printf '%s\\n' \"$tag\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"";
+    "[ -n \"$tag\" ] && printf '%s\\n' \"$tag\" > \"$2.$$\" && mv \"$2.$$\" \"$2\"";
 
   fflush(stdout);
   fflush(stderr);
@@ -1231,6 +1234,11 @@ void update_check() {
     dup2(devnull, STDIN_FILENO);
     dup2(devnull, STDOUT_FILENO);
     dup2(devnull, STDERR_FILENO);
+    // don't hold on to anything else the caller gave us (e.g. a pipe it waits
+    // on for EOF) while the fetch runs
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if (max_fd < 0 || max_fd > 65536) max_fd = 65536;
+    for (int fd = STDERR_FILENO + 1; fd < max_fd; fd++) close(fd);
     execl("/bin/sh", "sh", "-c", script, "await-update-check", dir, cache, url, NULL);
     _exit(127);
   }
