@@ -33,10 +33,12 @@ typedef struct {
   long start_time;
   long last_duration_ms;
   long prev_duration_ms;
+  volatile int runs;     // completed runs
+  volatile int changes;  // runs whose stdout differed from the previous run
+  int seenChanges;       // changes already acted on by the main loop
 } COMMAND;
 
 COMMAND c[100];
-COMMAND exec;
 
 typedef struct {
   int expectedStatus;
@@ -314,6 +316,8 @@ static void daemonize() {
     openlog("await", LOG_PID, LOG_DAEMON);
 }
 
+volatile sig_atomic_t stop = 0;
+
 int msleep(long msec)
 {
     struct timespec ts;
@@ -342,10 +346,10 @@ long current_time_ms() {
 }
 
 char * replace_placeholders(char *string) {
-  for(int i = 0; i < args.nCommands; i = i + 1) {
-    if (!c[i].previousOut) continue;
-    char C[3];
-    sprintf(C, "\\%d", i+1);
+  for(int i = args.nCommands; i >= 1; i--) {
+    if (!c[i].previousOut || !c[i].runs) continue;
+    char C[16];
+    sprintf(C, "\\%d", i);
     string = replace(C, c[i].previousOut, string);
   }
   for(int i = 1; i <= args.nCommands; i++) {
@@ -355,6 +359,44 @@ char * replace_placeholders(char *string) {
     string = replace(named, c[i].previousOut, string);
   }
   return string;
+}
+
+// does string contain placeholder \n (and not e.g. \n0)?
+int references(const char *string, int n) {
+  char C[16];
+  sprintf(C, "\\%d", n);
+  for (const char *p = strstr(string, C); p; p = strstr(p + 1, C))
+    if (p[strlen(C)] < '0' || p[strlen(C)] > '9') return 1;
+  return 0;
+}
+
+// commands referencing earlier commands (\1, \2...) wait for their first output
+void wait_for_dependencies(COMMAND *cmd) {
+  for (int k = 1; &c[k] < cmd; k++)
+  {
+    char named[256] = "";
+    if (c[k].name && c[k].name != c[k].command) snprintf(named, sizeof(named), "\\%s", c[k].name);
+    if (references(cmd->command, k) || (*named && strstr(cmd->command, named)))
+      while (!c[k].runs && !stop) msleep(10);
+  }
+}
+
+int run_exec() {
+  fflush(stdout);
+  fflush(stderr);
+  pid_t pid = fork();
+  if (pid == 0) {
+    execl("/bin/sh", "sh", "-c", replace_placeholders(args.exec), NULL);
+    _exit(127);
+  }
+  int status;
+  waitpid(pid, &status, 0);
+  return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+}
+
+int not_done_cmd(int i) {
+  if (args.change) return c[i].changes == c[i].seenChanges;
+  return c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
 }
 
 void print_json_result(int exit_code) {
@@ -522,8 +564,6 @@ void help() {
   exit(0);
 }
 
-volatile sig_atomic_t stop = 0;
-
 // void handle_sigint(int sig) {
 //     stop = 1;
 // }
@@ -619,8 +659,8 @@ void parse_args(int argc, char *argv[]) {
           case 'F': args.forever = 1; break;
           case 'c': args.change = 1; break;
           case 'S': args.service = optarg; break;
-          case 'i': args.interval = atoi(optarg) * 1000; break;
-          case 'T': args.timeout = atoi(optarg) * 1000; break;
+          case 'i': args.interval = (int)(atof(optarg) * 1000); break;
+          case 'T': args.timeout = (int)(atof(optarg) * 1000); break;
           case 't': args.cmd_timeout = atoi(optarg); break;
           case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
@@ -724,6 +764,7 @@ void *shell(void * arg) {
   c->diffOut = NULL;
 
   char buf[BUF_SIZE];
+  wait_for_dependencies(c);
   while (1) {
     c->outPos = 0;
     strcpy(c->out, "");
@@ -784,8 +825,9 @@ void *shell(void * arg) {
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
-    if (strcmp(c->previousOut, "first run") != 0) {
+    if (c->runs > 0) {
       c->change = strcmp(c->previousOut,c->out) != 0;
+      if (c->change) c->changes++;
       
       // Compute differences if diff mode is enabled
       if (args.diff && c->change) {
@@ -795,6 +837,7 @@ void *shell(void * arg) {
     }
 
     strcpy(c->previousOut, c->out);
+    c->runs++;
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     if (stop) {
@@ -813,7 +856,6 @@ int main(int argc, char *argv[]) {
     signal(SIGTTOU, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
   }
-  pthread_t exec_thread;
 
   // struct sigaction sa;
   // sa.sa_handler = handle_sigint;
@@ -830,10 +872,8 @@ int main(int argc, char *argv[]) {
 
   FILE *fp;
 
-  for(int i = 0; i <= args.nCommands; i++) {
-    c[i].status = -1;
-    pthread_create(&c[i].thread, NULL, shell, &c[i]);
-  }
+  for(int i = 0; i <= args.nCommands; i++) c[i].status = -1;
+  for(int i = 0; i <= args.nCommands; i++) pthread_create(&c[i].thread, NULL, shell, &c[i]);
 
   int not_done = 0;
   int rounds = 0;
@@ -905,7 +945,7 @@ int main(int argc, char *argv[]) {
             // Use current output
             output_to_show = malloc(strlen(c[i].out) + 1);
             strcpy(output_to_show, c[i].out);
-          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0 && strcmp(c[i].previousOut, "first run") != 0) {
+          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0) {
             // Use previous output if current is empty but we have previous
             output_to_show = malloc(strlen(c[i].previousOut) + 1);
             strcpy(output_to_show, c[i].previousOut);
@@ -922,8 +962,7 @@ int main(int argc, char *argv[]) {
           }
         }
         
-        if (args.change) not_done =  !c[i].change;
-        else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+        not_done += not_done_cmd(i);
       }
       
       // Print the entire display at once
@@ -967,7 +1006,7 @@ int main(int argc, char *argv[]) {
             // Use current output
             output_to_show = malloc(strlen(c[i].out) + 1);
             strcpy(output_to_show, c[i].out);
-          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0 && strcmp(c[i].previousOut, "first run") != 0) {
+          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0) {
             // Use previous output if current is empty but we have previous
             output_to_show = malloc(strlen(c[i].previousOut) + 1);
             strcpy(output_to_show, c[i].previousOut);
@@ -987,8 +1026,7 @@ int main(int argc, char *argv[]) {
             free(output_to_show);
           }
           
-          if (args.change) not_done =  !c[i].change;
-          else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+          not_done += not_done_cmd(i);
         }
         
         // Print the silent display
@@ -1007,33 +1045,30 @@ int main(int argc, char *argv[]) {
       } else {
         // No stdout mode, just check status
         for(int i = 1; i <= args.nCommands; i++) {
-          if (args.change) not_done =  !c[i].change;
-          else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+          not_done += not_done_cmd(i);
         }
       }
     }
 
     if (not_done == 0 || args.any && not_done < args.nCommands) {
+      // act on each change only once
+      for (int i = 1; i <= args.nCommands; i++) c[i].seenChanges = c[i].changes;
+
+      int exec_status = 0;
       if (args.exec) {
-        exec.command = args.exec;
-        exec.spinner = 1;
-        pthread_create(&exec_thread, NULL, shell, &exec);
+        exec_status = run_exec();
+        // exec output was printed below the display; start redrawing from here
+        free(last_display);
+        last_display = NULL;
+        free(last_silent_output);
+        last_silent_output = NULL;
+        first_output = 1;
       }
 
       if (!args.forever) {
-        if (!args.exec) {
-          fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
-          if (args.json) print_json_result(0);
-          return 0;
-        }
-        while (1) {
-          if (exec.spinner == 0) {
-            fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
-            if (args.json) print_json_result(0);
-            return 0;
-          }
-          msleep(10);
-        }
+        if (!args.silent) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+        if (args.json) print_json_result(exec_status);
+        return exec_status;
       }
     }
 
