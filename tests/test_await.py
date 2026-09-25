@@ -1479,6 +1479,27 @@ class TestCmdTimeoutAndRetry:
             if os.path.exists(counter):
                 os.remove(counter)
 
+
+class TestPublishOrder:
+    def test_exec_always_sees_the_output_that_triggered_it(self):
+        """Status becomes visible only together with the run's output, so
+        --exec never runs with a missing or stale \\1 (repeated to catch timing)."""
+        for _ in range(10):
+            returncode, stdout, stderr = run_await_with_timeout(
+                '-V "echo hi" --exec "echo [\\1]"',
+                description="Should print [hi]"
+            )
+            assert returncode == 0
+            assert "[hi]" in stdout, stdout
+
+    def test_json_status_and_output_match(self):
+        import json
+        for _ in range(10):
+            returncode, stdout, stderr = run_await_with_timeout('--json "echo done"')
+            command = json.loads(stdout.strip())["commands"][0]
+            assert command["status"] == 0
+            assert command["output"] == "done\n"
+
 if __name__ == "__main__":
     # Make sure await binary exists
     if not os.path.exists("../await"):

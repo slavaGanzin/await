@@ -1025,6 +1025,7 @@ void *shell(void * arg) {
   pthread_mutex_unlock(&c->lock);
 
   char buf[BUF_SIZE];
+  int run_status = -1;
   wait_for_dependencies(c);
   while (1) {
     pthread_mutex_lock(&c->lock);
@@ -1080,6 +1081,7 @@ void *shell(void * arg) {
       close(pipefd[1]); // Close write end
       c->pid = child_pid;
 
+    run_status = -1;
     long deadline = args.cmd_timeout > 0 ? c->start_time + args.cmd_timeout * 1000L : 0;
     int timed_out = 0;
     while (1) {
@@ -1114,9 +1116,9 @@ void *shell(void * arg) {
     close(pipefd[0]);
     int status;
     waitpid(c->pid, &status, 0);
-    // 124 like timeout(1)
-    c->status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
-    if (c->status == 127 && !c->warned127) {
+    // 124 like timeout(1); published below together with the output
+    run_status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    if (run_status == 127 && !c->warned127) {
       c->warned127 = 1;
       fprintf(stderr, "\nawait: '%s' exited with 127 (command not found).\n"
                        "       Check for a typo, or that it's installed and on PATH.\n",
@@ -1126,21 +1128,22 @@ void *shell(void * arg) {
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
-    int changed = 0;
-    pthread_mutex_lock(&c->lock);
-    if (c->runs > 0) {
-      c->change = changed = strcmp(c->previousOut,c->out) != 0;
-      
-      // Compute differences if diff mode is enabled
-      if (args.diff && c->change) {
-        if (c->diffOut) free(c->diffOut);
-        c->diffOut = highlight_differences(c->previousOut, c->out);
-      }
-    }
+    // out/previousOut are only written by this thread, so comparing and
+    // diffing them needs no lock; the lock only covers publishing
+    int changed = c->runs > 0 && strcmp(c->previousOut, c->out) != 0;
+    char *diff = changed && args.diff ? highlight_differences(c->previousOut, c->out) : NULL;
 
+    pthread_mutex_lock(&c->lock);
+    c->change = changed;
+    if (diff) {
+      free(c->diffOut);
+      c->diffOut = diff;
+    }
     strcpy(c->previousOut, c->out);
+    // publish status, run and change only once previousOut holds this run's
+    // output, so whoever acts on them (--exec, --json, \1) sees that output
+    c->status = run_status;
     c->runs++;
-    // publish the change only once previousOut holds the new output
     if (changed) c->changes++;
     pthread_mutex_unlock(&c->lock);
 
