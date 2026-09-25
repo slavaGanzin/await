@@ -37,7 +37,7 @@ typedef struct {
   _Atomic int status;
   int change;
   int warned127;
-  int pid;
+  _Atomic int pid;       // the command's running shell, 0 when none
   pthread_t thread;
   long start_time;
   _Atomic long last_duration_ms;
@@ -329,7 +329,7 @@ static void daemonize() {
     openlog("await", LOG_PID, LOG_DAEMON);
 }
 
-volatile sig_atomic_t stop = 0;
+_Atomic int stop = 0;
 
 int msleep(long msec)
 {
@@ -394,7 +394,8 @@ static COMMAND *placeholder(const char *p, size_t *plen) {
   COMMAND *found = NULL;
   *plen = 0;
   int n = 0;
-  for (size_t j = 1; p[j] >= '0' && p[j] <= '9' && j < 9; j++) {
+  // \0... is never a placeholder: it's an octal escape (printf '\001', echo -e)
+  for (size_t j = 1; p[1] != '0' && p[j] >= '0' && p[j] <= '9' && j < 9; j++) {
     n = n * 10 + (p[j] - '0');
     if (n >= 1 && n <= args.nCommands) { found = &c[n]; *plen = j + 1; }
   }
@@ -1116,6 +1117,7 @@ void *shell(void * arg) {
     close(pipefd[0]);
     int status;
     waitpid(c->pid, &status, 0);
+    c->pid = 0;
     // 124 like timeout(1); published below together with the output
     run_status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
     if (run_status == 127 && !c->warned127) {
@@ -1151,11 +1153,24 @@ void *shell(void * arg) {
     if (stop) {
       break;
     }
+    // with --retry N a command runs at most N times
+    if (args.retry > 0 && c->runs >= args.retry) break;
     msleep(args.interval);
   }
   return NULL;
 }
 
+
+// on exit, don't leave commands that are still running behind: with
+// --cmd-timeout each has its own process group, so everything it started
+// goes; otherwise its shell is stopped
+void stop_running_commands(void) {
+  stop = 1;
+  for (int i = 0; c && i <= args.nCommands; i++) {
+    int pid = c[i].pid;
+    if (pid > 0) kill(args.cmd_timeout > 0 ? -pid : pid, SIGTERM);
+  }
+}
 
 int main(int argc, char *argv[]) {
   // Ensure the program is in the foreground and can catch SIGINT when run from a bash script
@@ -1187,11 +1202,15 @@ int main(int argc, char *argv[]) {
 
   FILE *fp;
 
+  atexit(stop_running_commands);
   for(int i = 0; i <= args.nCommands; i++) {
     c[i].status = -1;
     pthread_mutex_init(&c[i].lock, NULL);
   }
-  for(int i = 0; i <= args.nCommands; i++) pthread_create(&c[i].thread, NULL, shell, &c[i]);
+  for(int i = 0; i <= args.nCommands; i++) {
+    pthread_create(&c[i].thread, NULL, shell, &c[i]);
+    pthread_detach(c[i].thread);  // a command's thread may finish (e.g. after its --retry runs)
+  }
 
   int not_done = 0;
     // TODO: make a clear screen option

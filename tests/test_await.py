@@ -1480,6 +1480,38 @@ class TestCmdTimeoutAndRetry:
                 os.remove(counter)
 
 
+class TestOctalEscapes:
+    def test_octal_escape_is_not_a_placeholder(self):
+        """\\001 is printf's octal escape, not \\1: output must not change between runs."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-Vo --forever "printf \'a\\\\001b\\\\n\'"',
+            timeout=1.0,
+            description="Every run should print a<SOH>b"
+        )
+        lines = {l for l in strip_ansi_escape_codes(stdout).replace("\r", "\n").split("\n") if l.strip()}
+        assert lines == {"a\x01b"}, lines
+
+
+class TestExitCleanup:
+    def test_commands_still_running_at_exit_are_stopped(self):
+        """With --any, await exits once one command succeeds; the others must not
+        keep running (and e.g. write files) after await is gone."""
+        marker = os.path.join(TMPDIR, f"await_orphan_{os.getpid()}")
+        if os.path.exists(marker):
+            os.remove(marker)
+        try:
+            returncode, stdout, stderr = run_await_with_timeout(
+                f'-V --any "true" "sleep 0.5; touch {marker}"',
+                description="Should exit and stop the still-running command"
+            )
+            assert returncode == 0
+            time.sleep(1)
+            assert not os.path.exists(marker), "a command kept running after await exited"
+        finally:
+            if os.path.exists(marker):
+                os.remove(marker)
+
+
 class TestPublishOrder:
     def test_exec_always_sees_the_output_that_triggered_it(self):
         """Status becomes visible only together with the run's output, so
