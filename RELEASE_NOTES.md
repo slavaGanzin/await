@@ -1,5 +1,13 @@
 # Release Notes
 
+## 2.9.0
+
+### New Features
+
+- **Update notifier.** In an interactive terminal, await checks for a newer release in the background and, when one exists, prints a one-line notice on stderr. The check never delays await: it runs as a detached process and its result is cached for a day in `~/.cache/await/latest-version` (or `$XDG_CACHE_HOME/await`), including failed checks, so offline machines aren't retried on every run. Nothing happens in scripts or CI (stderr not a terminal), and `AWAIT_NO_UPDATE_CHECK=1` turns it off. `--silent` hides the notice.
+
+---
+
 ## 2.8.0
 
 ### Fixes

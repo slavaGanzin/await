@@ -19,6 +19,9 @@
 #include <spawn.h>
 #include <poll.h>
 
+#define AWAIT_VERSION "2.9.0"
+#define AWAIT_RELEASES_API "https://api.github.com/repos/slavaGanzin/await/releases/latest"
+
 extern char **environ;
 
 
@@ -728,6 +731,8 @@ void help() {
   "# you can use stdout substitution in --exec and in commands itself:\n"
   "  await 'echo 10' 'date +%S' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
   "# set NO_COLOR=1 to disable colors\n"
+  "# in an interactive terminal, await checks for a newer release in the background (at most daily)\n"
+  "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
@@ -880,7 +885,7 @@ void parse_args(int argc, char *argv[]) {
           case 't': args.cmd_timeout = atoi(optarg); break;
           case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.8.0\n"); exit(0); break;
+          case 'v': printf("%s\n", AWAIT_VERSION); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -1124,6 +1129,84 @@ void *shell(void * arg) {
 }
 
 
+// compare dotted versions numerically ("2.10.0" > "2.9.0"), ignoring a leading "v"
+int version_cmp(const char *a, const char *b) {
+  if (*a == 'v') a++;
+  if (*b == 'v') b++;
+  while (*a || *b) {
+    long x = strtol(a, (char **)&a, 10), y = strtol(b, (char **)&b, 10);
+    if (x != y) return x < y ? -1 : 1;
+    if (*a == '.') a++;
+    if (*b == '.') b++;
+    if ((*a && (*a < '0' || *a > '9')) || (*b && (*b < '0' || *b > '9'))) break;
+  }
+  return 0;
+}
+
+// Update notifier: when a newer release is cached, say so; when the cache is
+// older than a day (or missing), refresh it in a detached background process,
+// so await itself never waits on the network. Only in interactive sessions,
+// and never when AWAIT_NO_UPDATE_CHECK is set. Must run before any threads.
+void update_check() {
+  const char *off = getenv("AWAIT_NO_UPDATE_CHECK");
+  if ((off && *off) || !isatty(STDERR_FILENO)) return;
+
+  const char *home = getenv("HOME");
+  if (!home || !*home) {
+    struct passwd *pw = getpwuid(getuid());
+    if (!pw) return;
+    home = pw->pw_dir;
+  }
+  const char *xdg = getenv("XDG_CACHE_HOME");
+  char dir[PATH_MAX], cache[PATH_MAX];
+  if (xdg && *xdg) snprintf(dir, sizeof(dir), "%s/await", xdg);
+  else snprintf(dir, sizeof(dir), "%s/.cache/await", home);
+  snprintf(cache, sizeof(cache), "%s/latest-version", dir);
+
+  // notify from whatever the cache holds, even if it's due for a refresh
+  char latest[64] = "";
+  FILE *f = fopen(cache, "r");
+  if (f) {
+    if (fscanf(f, "%63s", latest) != 1) latest[0] = '\0';
+    fclose(f);
+  }
+  if (*latest && version_cmp(latest, AWAIT_VERSION) > 0 && !args.silent)
+    fprintf(stderr, use_color()
+      ? "\033[33mawait %s is available (you have %s): https://github.com/slavaGanzin/await/releases/latest\033[0m\n"
+      : "await %s is available (you have %s): https://github.com/slavaGanzin/await/releases/latest\n",
+      latest, AWAIT_VERSION);
+
+  struct stat st;
+  if (stat(cache, &st) == 0 && time(NULL) - st.st_mtime < 24 * 60 * 60) return;
+
+  const char *url = getenv("AWAIT_UPDATE_URL");  // for tests
+  if (!url || !*url) url = AWAIT_RELEASES_API;
+  // touch first, so a failed or offline check also waits a day before retrying
+  const char *script =
+    "mkdir -p \"$1\" && touch \"$2\" || exit; "
+    "if command -v curl >/dev/null; then body=$(curl -fsSL --max-time 10 \"$3\"); "
+    "else body=$(wget -qO- -T 10 \"$3\"); fi; "
+    "tag=$(printf '%s\\n' \"$body\" | sed -n 's/.*\"tag_name\": *\"\\([^\"]*\\)\".*/\\1/p' | head -n1); "
+    "[ -n \"$tag\" ] && printf '%s\\n' \"$tag\" > \"$2.tmp\" && mv \"$2.tmp\" \"$2\"";
+
+  fflush(stdout);
+  fflush(stderr);
+  pid_t pid = fork();
+  if (pid == 0) {
+    // detach: new session, and let the intermediate child exit so the check
+    // is reparented and never becomes a zombie of ours
+    setsid();
+    if (fork() != 0) _exit(0);
+    int devnull = open("/dev/null", O_RDWR);
+    dup2(devnull, STDIN_FILENO);
+    dup2(devnull, STDOUT_FILENO);
+    dup2(devnull, STDERR_FILENO);
+    execl("/bin/sh", "sh", "-c", script, "await-update-check", dir, cache, url, NULL);
+    _exit(127);
+  }
+  if (pid > 0) waitpid(pid, NULL, 0);
+}
+
 int main(int argc, char *argv[]) {
   // Ensure the program is in the foreground and can catch SIGINT when run from a bash script
   if (tcgetpgrp(STDIN_FILENO) == getpgrp()) {
@@ -1147,6 +1230,7 @@ int main(int argc, char *argv[]) {
     setrlimit(RLIMIT_NOFILE, &nofile);
   }
   if (args.service) return service();
+  update_check();
 
   // Ensure the program does not ignore signals when running in a script
   signal(SIGINT, SIG_DFL);
