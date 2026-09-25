@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/resource.h>
 #include <stdarg.h>
 
 
@@ -783,11 +784,21 @@ void *shell(void * arg) {
     c->outPos = 0;
     strcpy(c->out, "");
 
+    // out of fds or processes (many commands): try again shortly
     int pipefd[2];
-    pipe(pipefd);
+    if (pipe(pipefd) != 0) {
+      msleep(50);
+      continue;
+    }
 
     c->start_time = current_time_ms();
     pid_t child_pid = fork();
+    if (child_pid < 0) {
+      close(pipefd[0]);
+      close(pipefd[1]);
+      msleep(50);
+      continue;
+    }
     if (child_pid == 0) {
       // Child process
       close(pipefd[0]); // Close read end
@@ -878,6 +889,13 @@ int main(int argc, char *argv[]) {
   // sigaction(SIGINT, &sa, NULL);
 
   parse_args(argc, argv);
+
+  // every running command holds a pipe; macOS defaults to 256 open files
+  struct rlimit nofile;
+  if (getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur < nofile.rlim_max) {
+    nofile.rlim_cur = nofile.rlim_max == RLIM_INFINITY || nofile.rlim_max > 10240 ? 10240 : nofile.rlim_max;
+    setrlimit(RLIMIT_NOFILE, &nofile);
+  }
   if (args.service) return service();
 
   // Ensure the program does not ignore signals when running in a script
