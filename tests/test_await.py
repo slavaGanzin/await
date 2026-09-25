@@ -868,7 +868,15 @@ class TestLargeInputs:
         states = {k: last.count(f"\x1b[0;{k}m") for k in ("37", "32", "31")}
         diagnosis = f"rc={returncode} after {elapsed:.1f}s, last frame pending/done/failed={states}"
         assert returncode == 0, diagnosis
-        assert elapsed < 5, diagnosis
+
+        # Process creation speed varies a lot between machines (macOS CI runs an
+        # x86_64 build under Rosetta), so compare against starting the same 150
+        # shells directly: await should add overhead, not a multiple of it.
+        start = time.time()
+        for proc in [subprocess.Popen(["sh", "-c", "true"]) for _ in range(150)]:
+            proc.wait()
+        baseline = time.time() - start
+        assert elapsed < 3 * baseline + 3, f"{diagnosis}; starting 150 shells directly took {baseline:.1f}s"
 
 
 class TestWatchFlag:
