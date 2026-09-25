@@ -33,10 +33,12 @@ typedef struct {
   long start_time;
   long last_duration_ms;
   long prev_duration_ms;
+  volatile int runs;     // completed runs
+  volatile int changes;  // runs whose stdout differed from the previous run
+  int seenChanges;       // changes already acted on by the main loop
 } COMMAND;
 
 COMMAND c[100];
-COMMAND exec;
 
 typedef struct {
   int expectedStatus;
@@ -315,6 +317,8 @@ static void daemonize() {
     openlog("await", LOG_PID, LOG_DAEMON);
 }
 
+volatile sig_atomic_t stop = 0;
+
 int msleep(long msec)
 {
     struct timespec ts;
@@ -342,20 +346,162 @@ long current_time_ms() {
     return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 }
 
-char * replace_placeholders(char *string) {
-  for(int i = 0; i < args.nCommands; i = i + 1) {
-    if (!c[i].previousOut) continue;
-    char C[3];
-    sprintf(C, "\\%d", i+1);
-    string = replace(C, c[i].previousOut, string);
+// command output without trailing newlines, like shell $(...)
+char * substitution(COMMAND *cmd) {
+  char *out = strdup(cmd->previousOut);
+  size_t len = strlen(out);
+  while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r')) out[--len] = '\0';
+  return out;
+}
+
+static void buf_add(char **buf, size_t *len, size_t *cap, const char *s, size_t n) {
+  if (*len + n + 1 > *cap) {
+    *cap = (*len + n + 1) * 2;
+    *buf = realloc(*buf, *cap);
   }
-  for(int i = 1; i <= args.nCommands; i++) {
-    if (!c[i].previousOut || !c[i].name || c[i].name == c[i].command) continue;
-    char named[256];
-    snprintf(named, sizeof(named), "\\%s", c[i].name);
-    string = replace(named, c[i].previousOut, string);
+  memcpy(*buf + *len, s, n);
+  *len += n;
+  (*buf)[*len] = '\0';
+}
+
+// Placeholders become references to $AWAIT_<n>, whose value is passed in
+// the environment (command_env): the shell never parses a variable's value
+// as code, however the placeholder is nested ('...', "...", $(...)).
+static void buf_add_reference(char **buf, size_t *len, size_t *cap, int n, char quote) {
+  char ref[64];
+  if (quote == '"') snprintf(ref, sizeof(ref), "${AWAIT_%d}", n);
+  else if (quote == '\'') snprintf(ref, sizeof(ref), "'\"${AWAIT_%d}\"'", n);
+  else snprintf(ref, sizeof(ref), "\"${AWAIT_%d}\"", n);
+  buf_add(buf, len, cap, ref, strlen(ref));
+}
+
+// placeholder at p (\1, \2 ... or \name) -> its command, and its length
+static COMMAND *placeholder(const char *p, size_t *plen) {
+  COMMAND *found = NULL;
+  *plen = 0;
+  int n = 0;
+  for (size_t j = 1; p[j] >= '0' && p[j] <= '9' && j < 9; j++) {
+    n = n * 10 + (p[j] - '0');
+    if (n >= 1 && n <= args.nCommands) { found = &c[n]; *plen = j + 1; }
   }
-  return string;
+  for (int i = 1; i <= args.nCommands; i++) {
+    if (!c[i].name || c[i].name == c[i].command) continue;
+    size_t l = strlen(c[i].name);
+    if (l + 1 > *plen && strncmp(p + 1, c[i].name, l) == 0) { found = &c[i]; *plen = l + 1; }
+  }
+  return found;
+}
+
+// new string with \1, \2 ... and \name replaced by the commands' last output
+char * replace_placeholders(const char *string) {
+  char *out = NULL;
+  size_t len = 0, cap = 0;
+  char quote = 0;
+  buf_add(&out, &len, &cap, "", 0);
+  for (const char *p = string; *p; ) {
+    if (*p == '\\') {
+      size_t plen;
+      // \\1 means \1: a backslash left in front of the reference would escape its $
+      if (p[1] == '\\' && quote != '\'' && placeholder(p + 1, &plen)) p++;
+      COMMAND *src = placeholder(p, &plen);
+      if (src && src->runs && src->previousOut) {
+        buf_add_reference(&out, &len, &cap, (int)(src - c), quote);
+        p += plen;
+        continue;
+      }
+      // not a placeholder: outside '...' an escaped quote doesn't open or close one
+      size_t n = (quote != '\'' && p[1] && strchr("'\"`$", p[1])) ? 2 : 1;
+      buf_add(&out, &len, &cap, p, n);
+      p += n;
+      continue;
+    }
+    if (*p == '\'' && quote != '"') quote = quote ? 0 : '\'';
+    else if (*p == '"' && quote != '\'') quote = quote ? 0 : '"';
+    buf_add(&out, &len, &cap, p, 1);
+    p++;
+  }
+  return out;
+}
+
+extern char **environ;
+
+// environment for a command: ours plus AWAIT_<n>=<output of command n>
+char ** command_env() {
+  size_t n = 0;
+  while (environ[n]) n++;
+  char **env = malloc((n + args.nCommands + 1) * sizeof(char *));
+  size_t k = 0;
+  for (size_t i = 0; i < n; i++)
+    if (strncmp(environ[i], "AWAIT_", 6) != 0) env[k++] = environ[i];
+  for (int i = 1; i <= args.nCommands; i++) {
+    if (!c[i].runs || !c[i].previousOut) continue;
+    char *value = substitution(&c[i]);
+    env[k] = malloc(strlen(value) + 32);
+    sprintf(env[k++], "AWAIT_%d=%s", i, value);
+    free(value);
+  }
+  env[k] = NULL;
+  return env;
+}
+
+void free_command_env(char **env) {
+  for (char **e = env; *e; e++)
+    if (strncmp(*e, "AWAIT_", 6) == 0) free(*e);
+  free(env);
+}
+
+// does string contain placeholder \n (and not e.g. \n0)?
+int references(const char *string, int n) {
+  char C[16];
+  sprintf(C, "\\%d", n);
+  for (const char *p = strstr(string, C); p; p = strstr(p + 1, C))
+    if (p[strlen(C)] < '0' || p[strlen(C)] > '9') return 1;
+  return 0;
+}
+
+// commands referencing earlier commands (\1, \2...) wait for their first output
+void wait_for_dependencies(COMMAND *cmd) {
+  for (int k = 1; &c[k] < cmd; k++)
+  {
+    char named[256] = "";
+    if (c[k].name && c[k].name != c[k].command) snprintf(named, sizeof(named), "\\%s", c[k].name);
+    if (references(cmd->command, k) || (*named && strstr(cmd->command, named)))
+      while (!c[k].runs && !stop) msleep(10);
+  }
+}
+
+pid_t exec_pid = 0;  // running --exec, if any
+
+pid_t start_exec() {
+  // build the command before fork: malloc in the child of a threaded process can deadlock
+  char *cmd = replace_placeholders(args.exec);
+  char **env = command_env();
+  fflush(stdout);
+  fflush(stderr);
+  pid_t pid = fork();
+  if (pid == 0) {
+    // keep stdout a single JSON document
+    if (args.json) dup2(STDERR_FILENO, STDOUT_FILENO);
+    execle("/bin/sh", "sh", "-c", cmd, NULL, env);
+    _exit(127);
+  }
+  free(cmd);
+  free_command_env(env);
+  if (pid < 0) perror("await: cannot run --exec");
+  return pid;
+}
+
+int wait_exec(pid_t pid) {
+  if (pid < 0) return 1;
+  int status;
+  while (waitpid(pid, &status, 0) < 0)
+    if (errno != EINTR) return 1;
+  return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+}
+
+int not_done_cmd(int i) {
+  if (args.change) return c[i].changes == c[i].seenChanges;
+  return c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
 }
 
 void print_json_result(int exit_code) {
@@ -544,8 +690,6 @@ void help() {
   exit(0);
 }
 
-volatile sig_atomic_t stop = 0;
-
 // void handle_sigint(int sig) {
 //     stop = 1;
 // }
@@ -558,12 +702,56 @@ int looks_like_bare_url(const char *s) {
   return strpbrk(s, " \t|&;<>()$`\\\"'") == NULL;
 }
 
+// append to args.args (the command line replayed by --service), growing it as needed
+void args_append(const char *s) {
+  static size_t len = 0, cap = 0;
+  size_t n = strlen(s);
+  if (len + n + 1 > cap) {
+    size_t new_cap = (len + n + 1) * 2;
+    char *grown = realloc(len ? args.args : NULL, new_cap);
+    if (!grown) {
+      perror("await");
+      exit(1);
+    }
+    args.args = grown;
+    cap = new_cap;
+  }
+  memcpy(args.args + len, s, n + 1);
+  len += n;
+}
+
+// s as a double-quoted systemd ExecStart argument (new string)
+char * systemd_quote(const char *s) {
+  char *q = malloc(strlen(s) * 2 + 3), *w = q;
+  if (!q) {
+    perror("await");
+    exit(1);
+  }
+  *w++ = '"';
+  for (const char *p = s; *p; p++) {
+    if (*p == '\\' || *p == '"') { *w++ = '\\'; *w++ = *p; }
+    else if (*p == '$' || *p == '%') { *w++ = *p; *w++ = *p; }
+    else if (*p == '\n') { *w++ = '\\'; *w++ = 'n'; }
+    else *w++ = *p;
+  }
+  *w++ = '"';
+  *w = '\0';
+  return q;
+}
+
+void args_append_quoted(const char *s) {
+  char *q = systemd_quote(s);
+  args_append(q);
+  free(q);
+}
+
 void parse_args(int argc, char *argv[]) {
     int getopt;
     char *names[100] = {NULL};
     int names_count = 0;
 
-    args.args = malloc(1000);
+    args.args = NULL;
+    args_append("");
 
     while (1) {
         static struct option long_options[] = {
@@ -602,17 +790,17 @@ void parse_args(int argc, char *argv[]) {
           break;
 
         if (getopt != 'S') {
-          strcat(args.args, "--");
-          for (int i =0; i<18; i++) {
-            if (long_options[i].val == getopt)
-              strcat(args.args, long_options[i].name);
+          for (int i = 0; long_options[i].name; i++) {
+            if (long_options[i].val != getopt) continue;
+            args_append("--");
+            args_append(long_options[i].name);
+            if (long_options[i].has_arg) {
+              args_append(" ");
+              args_append_quoted(optarg);
+            }
+            args_append(" ");
+            break;
           }
-          if (optarg) {
-            strcat(args.args, " \"");
-            strcat(args.args, optarg);
-            strcat(args.args, "\"");
-          }
-          strcat(args.args, " ");
         }
 
         switch (getopt) {
@@ -641,8 +829,8 @@ void parse_args(int argc, char *argv[]) {
           case 'F': args.forever = 1; break;
           case 'c': args.change = 1; break;
           case 'S': args.service = optarg; break;
-          case 'i': args.interval = atoi(optarg) * 1000; break;
-          case 'T': args.timeout = atoi(optarg) * 1000; break;
+          case 'i': args.interval = (int)(atof(optarg) * 1000); break;
+          case 'T': args.timeout = (int)(atof(optarg) * 1000); break;
           case 't': args.cmd_timeout = atoi(optarg); break;
           case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
@@ -693,9 +881,8 @@ void parse_args(int argc, char *argv[]) {
           "         await 'curl -sf %s'\n",
           argv[optind], argv[optind]);
       }
-      strcat(args.args, " \"");
-      strcat(args.args, argv[optind]);
-      strcat(args.args, "\"");
+      args_append(" ");
+      args_append_quoted(argv[optind]);
       c[++args.nCommands].command = argv[optind];
       c[args.nCommands].name = (args.nCommands <= names_count && names[args.nCommands-1]) ? names[args.nCommands-1] : argv[optind];
       optind++;
@@ -715,10 +902,31 @@ int service() {
   char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
   char cwd[PATH_MAX];
   getcwd(cwd, sizeof(cwd));
-  char binary[BUFSIZ];
-  readlink("/proc/self/exe", binary, BUFSIZ);
+  char binary[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", binary, sizeof(binary) - 1);
+  if (len < 0) {
+    fprintf(stderr, "await: --service needs /proc/self/exe (Linux with systemd)\n");
+    return 1;
+  }
+  binary[len] = '\0';
 
+  // mkdir -p without a shell, so any HOME works
+  char *dir = replace("HOME", home, "HOME/.config/systemd/user");
+  for (char *p = dir + 1; *p; p++) {
+    if (*p != '/') continue;
+    *p = '\0';
+    mkdir(dir, 0755);
+    *p = '/';
+  }
+  mkdir(dir, 0755);
   fp = fopen(f, "w");
+  if (!fp) {
+    fprintf(stderr, "await: cannot write %s: %s\n", f, strerror(errno));
+    return 1;
+  }
+  char *quoted_binary = systemd_quote(binary);
+  char *exec_start = malloc(strlen(quoted_binary) + strlen(args.args) + 2);
+  sprintf(exec_start, "%s %s", quoted_binary, args.args);
   fprintf(fp,
     "[Unit]\n"\
     "Description=await %s\n"\
@@ -731,7 +939,7 @@ int service() {
     "Restart=always\n"\
     "[Install]\n"\
     "WantedBy=default.target\n"
-   , args.args, cwd, replace("ARGS", args.args, replace("BINARY", binary, "BINARY ARGS")));
+   , args.args, replace("%", "%%", cwd), exec_start);
   fclose(fp);
 
   system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
@@ -743,13 +951,17 @@ void *shell(void * arg) {
   c->out = malloc(CHUNK_SIZE * sizeof(char));
   strcpy(c->out, "");
   c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  c->previousOut[0] = '\0';
   c->diffOut = NULL;
 
   char buf[BUF_SIZE];
+  wait_for_dependencies(c);
   while (1) {
     c->outPos = 0;
     strcpy(c->out, "");
 
+    char *cmd = replace_placeholders(c->command);
+    char **env = command_env();
     int pipefd[2];
     pipe(pipefd);
 
@@ -770,11 +982,12 @@ void *shell(void * arg) {
       close(pipefd[1]);
       if (args.cmd_timeout > 0)
         alarm(args.cmd_timeout);
-      char *cmd = replace_placeholders(c->command);
-      execl("/bin/sh", "sh", "-c", cmd, NULL);
+      execle("/bin/sh", "sh", "-c", cmd, NULL, env);
       exit(1);
     } else {
       // Parent process
+      free(cmd);
+      free_command_env(env);
       close(pipefd[1]); // Close write end
       FILE *fp = fdopen(pipefd[0], "r");
       c->pid = child_pid;
@@ -806,8 +1019,9 @@ void *shell(void * arg) {
     c->last_duration_ms = current_time_ms() - c->start_time;
     }
 
-    if (strcmp(c->previousOut, "first run") != 0) {
-      c->change = strcmp(c->previousOut,c->out) != 0;
+    int changed = 0;
+    if (c->runs > 0) {
+      c->change = changed = strcmp(c->previousOut,c->out) != 0;
       
       // Compute differences if diff mode is enabled
       if (args.diff && c->change) {
@@ -817,6 +1031,9 @@ void *shell(void * arg) {
     }
 
     strcpy(c->previousOut, c->out);
+    c->runs++;
+    // publish the change only once previousOut holds the new output
+    if (changed) c->changes++;
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
     if (stop) {
@@ -835,7 +1052,6 @@ int main(int argc, char *argv[]) {
     signal(SIGTTOU, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
   }
-  pthread_t exec_thread;
 
   // struct sigaction sa;
   // sa.sa_handler = handle_sigint;
@@ -852,10 +1068,8 @@ int main(int argc, char *argv[]) {
 
   FILE *fp;
 
-  for(int i = 0; i <= args.nCommands; i++) {
-    c[i].status = -1;
-    pthread_create(&c[i].thread, NULL, shell, &c[i]);
-  }
+  for(int i = 0; i <= args.nCommands; i++) c[i].status = -1;
+  for(int i = 0; i <= args.nCommands; i++) pthread_create(&c[i].thread, NULL, shell, &c[i]);
 
   int not_done = 0;
   int rounds = 0;
@@ -927,7 +1141,7 @@ int main(int argc, char *argv[]) {
             // Use current output
             output_to_show = malloc(strlen(c[i].out) + 1);
             strcpy(output_to_show, c[i].out);
-          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0 && strcmp(c[i].previousOut, "first run") != 0) {
+          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0) {
             // Use previous output if current is empty but we have previous
             output_to_show = malloc(strlen(c[i].previousOut) + 1);
             strcpy(output_to_show, c[i].previousOut);
@@ -944,8 +1158,7 @@ int main(int argc, char *argv[]) {
           }
         }
         
-        if (args.change) not_done =  !c[i].change;
-        else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+        not_done += not_done_cmd(i);
       }
       
       // Print the entire display at once
@@ -990,7 +1203,7 @@ int main(int argc, char *argv[]) {
             // Use current output
             output_to_show = malloc(strlen(c[i].out) + 1);
             strcpy(output_to_show, c[i].out);
-          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0 && strcmp(c[i].previousOut, "first run") != 0) {
+          } else if (c[i].previousOut && strlen(c[i].previousOut) > 0) {
             // Use previous output if current is empty but we have previous
             output_to_show = malloc(strlen(c[i].previousOut) + 1);
             strcpy(output_to_show, c[i].previousOut);
@@ -1010,8 +1223,7 @@ int main(int argc, char *argv[]) {
             free(output_to_show);
           }
           
-          if (args.change) not_done =  !c[i].change;
-          else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+          not_done += not_done_cmd(i);
         }
         
         // Print the silent display
@@ -1031,33 +1243,36 @@ int main(int argc, char *argv[]) {
       } else {
         // No stdout mode, just check status
         for(int i = 1; i <= args.nCommands; i++) {
-          if (args.change) not_done =  !c[i].change;
-          else not_done += c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
+          not_done += not_done_cmd(i);
         }
       }
     }
 
-    if (not_done == 0 || args.any && not_done < args.nCommands) {
+    // reap an --exec started by an earlier trigger (--forever)
+    if (exec_pid > 0 && waitpid(exec_pid, NULL, WNOHANG) != 0) exec_pid = 0;
+
+    // with --forever, a trigger during a running --exec waits for it to finish
+    if ((not_done == 0 || args.any && not_done < args.nCommands) && !exec_pid) {
+      // act on each change only once
+      for (int i = 1; i <= args.nCommands; i++) c[i].seenChanges = c[i].changes;
+
+      int exec_status = 0;
       if (args.exec) {
-        exec.command = args.exec;
-        exec.spinner = 1;
-        pthread_create(&exec_thread, NULL, shell, &exec);
+        exec_pid = start_exec();
+        if (!args.forever) exec_status = wait_exec(exec_pid);
+        else if (exec_pid < 0) exec_pid = 0;
+        // exec output was printed below the display; start redrawing from here
+        free(last_display);
+        last_display = NULL;
+        free(last_silent_output);
+        last_silent_output = NULL;
+        first_output = 1;
       }
 
       if (!args.forever) {
-        if (!args.exec) {
-          if (isatty(STDERR_FILENO)) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
-          if (args.json) print_json_result(0);
-          return 0;
-        }
-        while (1) {
-          if (exec.spinner == 0) {
-            if (isatty(STDERR_FILENO)) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
-            if (args.json) print_json_result(0);
-            return 0;
-          }
-          msleep(10);
-        }
+        if (!args.silent && isatty(STDERR_FILENO)) fprintf(stderr, "\033[%dB\r", args.nCommands + 1);
+        if (args.json) print_json_result(exec_status);
+        return exec_status;
       }
     }
 
