@@ -876,7 +876,7 @@ void parse_args(int argc, char *argv[]) {
           case 't': args.cmd_timeout = atoi(optarg); break;
           case 'r': args.retry = atoi(optarg); break;
           case 'd': args.diff = 1; break;
-          case 'v': printf("2.7.0\n"); exit(0); break;
+          case 'v': printf("2.8.0\n"); exit(0); break;
           case 'h': case '?': help(); break;
           case 1:
             if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
