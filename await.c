@@ -382,17 +382,33 @@ void print_json_result(int exit_code) {
   printf("]}\n");
 }
 
-// printf onto the end of a heap string, growing it as needed
-void sappendf(char **s, const char *fmt, ...) {
+// capacity of a sappendf string of length len: the next power of two
+static size_t sappendf_cap(size_t len) {
+  size_t cap = 1;
+  while (cap < len + 1) cap *= 2;
+  return cap;
+}
+
+// printf onto the end of a heap string of length *len (from strdup("")), growing it geometrically
+void sappendf(char **s, size_t *len, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   int n = vsnprintf(NULL, 0, fmt, ap);
   va_end(ap);
-  size_t len = strlen(*s);
-  *s = realloc(*s, len + n + 1);
+  if (n < 0) return;
+  size_t cap = sappendf_cap(*len + n);
+  if (cap > sappendf_cap(*len)) {
+    char *grown = realloc(*s, cap);
+    if (!grown) {
+      perror("await");
+      exit(1);
+    }
+    *s = grown;
+  }
   va_start(ap, fmt);
-  vsnprintf(*s + len, n + 1, fmt, ap);
+  vsnprintf(*s + *len, n + 1, fmt, ap);
   va_end(ap);
+  *len += n;
 }
 
 char * colorize_comments(char *string) {
@@ -972,6 +988,7 @@ int main(int argc, char *argv[]) {
       
       // Build the entire display string first
       char *display = strdup("");
+      size_t display_len = 0;
       
       for(int i = 1; i <= args.nCommands; i++) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
@@ -983,12 +1000,12 @@ int main(int argc, char *argv[]) {
             if (c[i].last_duration_ms < c[i].prev_duration_ms) time_color = "\033[32m";
             else if (c[i].last_duration_ms > c[i].prev_duration_ms) time_color = "\033[31m";
           }
-          sappendf(&display, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         }
         else if (args.lap)
-          sappendf(&display, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         else
-          sappendf(&display, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, &display_len, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         
         // Add output if available, or previous output if command has run before
         if (args.stdout) {
@@ -1013,7 +1030,7 @@ int main(int argc, char *argv[]) {
             if (len > 0 && output_to_show[len - 1] == '\n') {
                 output_to_show[len - 1] = '\0';
             }
-            sappendf(&display, "%s\n", output_to_show);
+            sappendf(&display, &display_len, "%s\n", output_to_show);
             free(output_to_show);
           }
         }
@@ -1049,6 +1066,7 @@ int main(int argc, char *argv[]) {
         
         // Build silent output display
         char *silent_display = strdup("");
+        size_t silent_display_len = 0;
         int has_output = 0;
         
         for(int i = 1; i <= args.nCommands; i++) {
@@ -1075,9 +1093,9 @@ int main(int argc, char *argv[]) {
             }
             
             if (has_output) {
-              sappendf(&silent_display, "\n");
+              sappendf(&silent_display, &silent_display_len, "\n");
             }
-            sappendf(&silent_display, "%s", output_to_show);
+            sappendf(&silent_display, &silent_display_len, "%s", output_to_show);
             has_output = 1;
             free(output_to_show);
           }

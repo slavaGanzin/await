@@ -841,7 +841,8 @@ class TestLargeInputs:
     def test_large_output_with_spinner(self):
         returncode, stdout, stderr = run_await_with_timeout('-o "seq 5000"', timeout=5.0)
         assert returncode == 0
-        assert "5000" in stderr
+        # 4999 only appears in the output, not in the "seq 5000" status line
+        assert "4999" in stderr
 
     def test_large_output_silent(self):
         returncode, stdout, stderr = run_await_with_timeout('-Vo "seq 200000"', timeout=5.0)
