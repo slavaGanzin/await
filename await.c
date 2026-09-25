@@ -352,7 +352,7 @@ char * replace_placeholders(char *string) {
   string = strdup(string);
   for(int i = 0; i < args.nCommands; i = i + 1) {
     if (!c[i].previousOut) continue;
-    char C[3];
+    char C[16];
     sprintf(C, "\\%d", i+1);
     char *next = replace(C, c[i].previousOut, string);
     free(string);
@@ -828,6 +828,7 @@ void *shell(void * arg) {
   c->out = malloc(c->outCap);
   strcpy(c->out, "");
   c->previousOut = malloc(c->outCap);
+  c->previousOut[0] = '\0';
   c->diffOut = NULL;
 
   char buf[BUF_SIZE];
