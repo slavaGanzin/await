@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/time.h>
+#include <stdarg.h>
 
 
 char *spinner[] = {"⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"};
@@ -25,6 +26,7 @@ typedef struct {
   char *previousOut;
   char *diffOut;  // For storing difference-highlighted output
   size_t outPos;
+  size_t outCap;
   int status;
   int change;
   int warned127;
@@ -35,7 +37,7 @@ typedef struct {
   long prev_duration_ms;
 } COMMAND;
 
-COMMAND c[100];
+COMMAND *c;
 COMMAND exec;
 
 typedef struct {
@@ -379,6 +381,19 @@ void print_json_result(int exit_code) {
   printf("]}\n");
 }
 
+// printf onto the end of a heap string, growing it as needed
+void sappendf(char **s, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(NULL, 0, fmt, ap);
+  va_end(ap);
+  size_t len = strlen(*s);
+  *s = realloc(*s, len + n + 1);
+  va_start(ap, fmt);
+  vsnprintf(*s + len, n + 1, fmt, ap);
+  va_end(ap);
+}
+
 char * colorize_comments(char *string) {
   string = replace("#", "\033[33m#", string);
   string = replace("\n", "\033[0m\n", string);
@@ -393,7 +408,7 @@ char * highlight_differences(const char *old_text, const char *new_text) {
   int new_len = strlen(new_text);
   
   // Allocate enough space for highlighted text (worst case: every char highlighted)
-  char *highlighted = malloc(new_len * 10); // Generous space for ANSI codes
+  char *highlighted = malloc(new_len * 10 + 1); // worst case: every char wrapped in ANSI codes
   highlighted[0] = '\0';
   
   int old_pos = 0, new_pos = 0;
@@ -565,7 +580,8 @@ void args_append_quoted(const char *s) {
 
 void parse_args(int argc, char *argv[]) {
     int getopt;
-    char *names[100] = {NULL};
+    char **names = calloc(argc, sizeof(char *));
+    c = calloc(argc + 1, sizeof(COMMAND));
     int names_count = 0;
 
     args.args = NULL;
@@ -756,9 +772,10 @@ int service() {
 
 void *shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
-  c->out = malloc(CHUNK_SIZE * sizeof(char));
+  c->outCap = CHUNK_SIZE;
+  c->out = malloc(c->outCap);
   strcpy(c->out, "");
-  c->previousOut = malloc(CHUNK_SIZE * sizeof(char));
+  c->previousOut = malloc(c->outCap);
   c->diffOut = NULL;
 
   char buf[BUF_SIZE];
@@ -796,13 +813,14 @@ void *shell(void * arg) {
       c->pid = child_pid;
 
     while (fgets(buf, BUF_SIZE, fp) !=NULL) {
-      c->outPos += BUF_SIZE;
-
-      if (c->outPos % CHUNK_SIZE > CHUNK_SIZE*0.8) {
-        c->out = realloc(c->out, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
-        c->previousOut = realloc(c->previousOut, c->outPos + c->outPos % CHUNK_SIZE + CHUNK_SIZE);
+      size_t n = strlen(buf);
+      if (c->outPos + n + 1 > c->outCap) {
+        c->outCap = (c->outPos + n + 1) * 2;
+        c->out = realloc(c->out, c->outCap);
+        c->previousOut = realloc(c->previousOut, c->outCap);
       }
-      sprintf(c->out, "%s%s", c->out, buf);
+      memcpy(c->out + c->outPos, buf, n + 1);
+      c->outPos += n;
     }
 
     if (!c->spinner || c->spinner == 0) c->spinner = sizeof(spinner)/sizeof(spinner[0]);
@@ -909,27 +927,24 @@ int main(int argc, char *argv[]) {
       }
       
       // Build the entire display string first
-      char *display = malloc(10000); // Large buffer for display
-      strcpy(display, "");
+      char *display = strdup("");
       
       for(int i = 1; i <= args.nCommands; i++) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
         
         // Add status line
-        char status_line[1000];
         if (args.lap && c[i].last_duration_ms > 0) {
           const char *time_color = "\033[2m";
           if (c[i].prev_duration_ms > 0) {
             if (c[i].last_duration_ms < c[i].prev_duration_ms) time_color = "\033[32m";
             else if (c[i].last_duration_ms > c[i].prev_duration_ms) time_color = "\033[31m";
           }
-          sprintf(status_line, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, "%s%.2fs\033[0m \033[0;3%dm%s\033[0m %s\n", time_color, c[i].last_duration_ms / 1000.0, color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         }
         else if (args.lap)
-          sprintf(status_line, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
+          sappendf(&display, "      \033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         else
-          sprintf(status_line, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
-        strcat(display, status_line);
+          sappendf(&display, "\033[0;3%dm%s\033[0m %s\n", color, spinner[c[i].spinner], c[i].name ? c[i].name : c[i].command);
         
         // Add output if available, or previous output if command has run before
         if (args.stdout) {
@@ -954,8 +969,7 @@ int main(int argc, char *argv[]) {
             if (len > 0 && output_to_show[len - 1] == '\n') {
                 output_to_show[len - 1] = '\0';
             }
-            strcat(display, output_to_show);
-            strcat(display, "\n");
+            sappendf(&display, "%s\n", output_to_show);
             free(output_to_show);
           }
         }
@@ -990,8 +1004,7 @@ int main(int argc, char *argv[]) {
         }
         
         // Build silent output display
-        char *silent_display = malloc(10000);
-        strcpy(silent_display, "");
+        char *silent_display = strdup("");
         int has_output = 0;
         
         for(int i = 1; i <= args.nCommands; i++) {
@@ -1018,9 +1031,9 @@ int main(int argc, char *argv[]) {
             }
             
             if (has_output) {
-              strcat(silent_display, "\n");
+              sappendf(&silent_display, "\n");
             }
-            strcat(silent_display, output_to_show);
+            sappendf(&silent_display, "%s", output_to_show);
             has_output = 1;
             free(output_to_show);
           }

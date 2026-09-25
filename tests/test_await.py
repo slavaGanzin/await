@@ -822,6 +822,30 @@ class TestNoStderrFlag:
         assert returncode == 0
 
 
+class TestLargeInputs:
+    """Inputs that overflowed fixed-size buffers."""
+
+    def test_large_output_with_spinner(self):
+        returncode, stdout, stderr = run_await_with_timeout('-o "seq 5000"', timeout=5.0)
+        assert returncode == 0
+        assert "5000" in stderr
+
+    def test_large_output_silent(self):
+        returncode, stdout, stderr = run_await_with_timeout('-Vo "seq 200000"', timeout=5.0)
+        assert returncode == 0
+        assert "200000" in stdout
+
+    def test_long_command(self):
+        long_arg = "x" * 2000
+        returncode, stdout, stderr = run_await_with_timeout(f'"echo {long_arg}"', timeout=5.0)
+        assert returncode == 0
+
+    def test_many_commands(self):
+        commands = " ".join(['"true"'] * 150)
+        returncode, stdout, stderr = run_await_with_timeout(f'-V {commands}', timeout=5.0)
+        assert returncode == 0
+
+
 class TestWatchFlag:
     """Test --watch / -w flag functionality."""
 
