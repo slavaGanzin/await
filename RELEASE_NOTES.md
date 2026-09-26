@@ -4,6 +4,7 @@
 
 ### New Features
 
+- **Windows build** (`x86_64-pc-windows-msys`) for Git Bash and MSYS2: commands keep the same `sh` syntax as on Linux and macOS, and `await --update` works there too. `--service` isn't available on Windows.
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.

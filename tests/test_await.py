@@ -1554,7 +1554,7 @@ class FakeReleases:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/releases"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True):
+    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True, name="await"):
         """Publish `version` with an archive for `target` whose `await` is a stand-in
         that answers --version (or `binary`, a shell script)."""
         import hashlib, io, tarfile
@@ -1562,7 +1562,7 @@ class FakeReleases:
         script = binary or f"#!/bin/sh\necho {version}\n"
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            info = tarfile.TarInfo("await")
+            info = tarfile.TarInfo(name)
             info.size, info.mode = len(script), 0o644   # like the old archives: not executable
             tar.addfile(info, io.BytesIO(script.encode()))
         archive = f"await-{version}-{target}.tar.gz"
@@ -1820,6 +1820,14 @@ class TestSelfUpdate:
         assert returncode != 0
         assert "has no test-target build" in err
         self.assert_untouched()
+
+    def test_windows_archive_with_await_exe(self):
+        """The Windows (MSYS2) archive holds await.exe instead of await."""
+        self.releases.publish("99.0.0", name="await.exe")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert self.installed_version(self.binary + ".old") == self.version
 
     def test_forced_update_reinstalls_the_same_or_an_older_release(self):
         """AWAIT_UPDATE_FORCE (CI's end-to-end check) installs the latest release
