@@ -808,6 +808,85 @@ class TestService:
                                     capture_output=True, text=True)
             assert verify.returncode == 0, verify.stderr
 
+    @staticmethod
+    def _run_service(argv, home, env_extra=None):
+        env = {**os.environ, "HOME": home, "AWAIT_SERVICE_NO_ACTIVATE": "1", **(env_extra or {})}
+        return subprocess.run(["../await", *argv], env=env, capture_output=True, text=True, timeout=5)
+
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
+    def test_service_no_activate_writes_unit_only(self):
+        home = tempfile.mkdtemp()
+        bindir = tempfile.mkdtemp()
+        marker = os.path.join(home, "called")
+        for stub in ("systemctl", "journalctl"):
+            path = os.path.join(bindir, stub)
+            with open(path, "w") as f:
+                f.write(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+            os.chmod(path, 0o755)
+        result = self._run_service(["-f", "true", "--service", "noact"], home,
+                                   {"PATH": bindir + ":" + os.environ["PATH"]})
+        assert result.returncode == 0, result.stderr
+        unit_path = os.path.join(home, ".config/systemd/user/noact.service")
+        with open(unit_path) as f:
+            unit = f.read()
+        assert "Restart=always" in unit
+        assert '--fail  "true"' in unit
+        assert unit_path in result.stdout
+        assert not os.path.exists(marker), "systemctl/journalctl ran despite AWAIT_SERVICE_NO_ACTIVATE"
+
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
+    def test_service_invalid_name_rejected_linux(self):
+        home = tempfile.mkdtemp()
+        for name in ("a/b", "../x", "", "a b", "x@y", "."):
+            result = self._run_service(["true", "--service", name], home)
+            assert result.returncode == 2, (name, result.stderr)
+            assert "invalid --service name" in result.stderr
+        assert not os.path.exists(os.path.join(home, ".config"))
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_launchd_plist(self):
+        import plistlib
+        home = tempfile.mkdtemp()
+        cmd = 'echo "a b" \'c\' && test 1 \\< 2 > /dev/null; echo $HOME \\\\n & wait'
+        args = ["-f", "--name", "it's <web> & co", "-i", "0.5", cmd, "second cmd"]
+        for service_args, rest in (
+            (["--service", "t.x_1-2"], []),
+            (["-S", "t.x_1-2"], []),
+            (["--service=t.x_1-2"], []),
+        ):
+            result = self._run_service([*args, *service_args, *rest], home)
+            assert result.returncode == 0, result.stderr
+            plist_path = os.path.join(home, "Library/LaunchAgents/await.t.x_1-2.plist")
+            assert plist_path in result.stdout
+            lint = subprocess.run(["plutil", "-lint", plist_path], capture_output=True, text=True)
+            assert lint.returncode == 0, lint.stdout + lint.stderr
+            with open(plist_path, "rb") as f:
+                plist = plistlib.load(f)
+            assert plist["ProgramArguments"] == [os.path.realpath("../await"), *args]
+            assert plist["Label"] == "await.t.x_1-2"
+            assert plist["KeepAlive"] is True
+            assert plist["RunAtLoad"] is True
+            log = os.path.join(home, "Library/Logs/await-t.x_1-2.log")
+            assert plist["StandardOutPath"] == log
+            assert plist["StandardErrorPath"] == log
+            assert plist["EnvironmentVariables"]["PATH"] == os.environ["PATH"]
+            assert os.path.isdir(os.path.join(home, "Library/Logs"))
+
+        # -S inside a cluster of short flags, value in the next argument
+        result = self._run_service(["-fS", "c", "true"], home)
+        assert result.returncode == 0, result.stderr
+        with open(os.path.join(home, "Library/LaunchAgents/await.c.plist"), "rb") as f:
+            assert plistlib.load(f)["ProgramArguments"][1:] == ["-f", "true"]
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_invalid_name_rejected_macos(self):
+        home = tempfile.mkdtemp()
+        for name in ("a/b", "../x", "", "a b", "x:y", "."):
+            result = self._run_service(["true", "--service", name], home)
+            assert result.returncode == 2, (name, result.stderr)
+            assert "invalid --service name" in result.stderr
+        assert not os.path.exists(os.path.join(home, "Library"))
+
 
 class TestNoStderrFlag:
     """Test --no-stderr / -E flag functionality."""

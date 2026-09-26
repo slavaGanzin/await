@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **`--service NAME` works on macOS**: it writes a launchd agent to `~/Library/LaunchAgents/await.NAME.plist` that replays the exact arguments (minus `--service`), starts at login, restarts whenever it exits (like `Restart=always` on systemd), keeps your `PATH` and logs to `~/Library/Logs/await-NAME.log`, then loads it with `launchctl`. Stop it with `launchctl bootout gui/$UID/await.NAME`. Service names are now checked on both platforms (letters, digits, `.`, `_`, `-`; systemd also allows `:`).
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
