@@ -118,6 +118,10 @@ jobs:
       run: |
         pytest test_await.py -v
 
+    # install the real latest release over this build with await --update
+    - name: End-to-end update from the latest release
+      run: tests/update_e2e.sh ./await
+
     - name: Tree
       if: matrix.os == 'ubuntu-latest'
       run: tree
@@ -177,6 +181,9 @@ jobs:
         pip install -e .
         pip install pytest pytest-timeout
         pytest test_await.py -v
+
+    - name: End-to-end update from the latest release
+      run: tests/update_e2e.sh ./await
 
     - uses: actions/upload-artifact@v4
       with:
