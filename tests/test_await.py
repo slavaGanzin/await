@@ -1113,6 +1113,13 @@ class TestManPage:
         return re.sub(r'\x1b\[[0-9;]*m', '', r.stdout)
 
     @staticmethod
+    def _no_formatter():
+        # CI must check the page for real; locally a missing tool is only a skip
+        if os.environ.get('CI') == 'true':
+            pytest.fail('neither mandoc nor groff is installed (required in CI)')
+        pytest.skip('neither mandoc nor groff is installed')
+
+    @staticmethod
     def _render(path):
         """Render to plain text with mandoc or groff; None if neither is installed."""
         for cmd in (['mandoc', '-Tutf8', '-O', 'width=200', path],
@@ -1158,12 +1165,12 @@ class TestManPage:
                 continue
             assert r.returncode == 0 and not (r.stdout + r.stderr).strip(), r.stdout + r.stderr
             return
-        pytest.skip('neither mandoc nor groff is installed')
+        self._no_formatter()
 
     def test_renders_name_and_examples(self, page_file):
         text = self._render(page_file)
         if text is None:
-            pytest.skip('neither mandoc nor groff is installed')
+            self._no_formatter()
         assert re.search(r'^\s*await - runs list of commands', text, re.M)
         # backslashes, quotes and hyphens survive as typed, so examples copy-paste
         assert "await 'curl google.com' --fail" in text
@@ -1670,9 +1677,10 @@ class FakeReleases:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/releases"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True):
+    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True, extra_files=None):
         """Publish `version` with an archive for `target` whose `await` is a stand-in
-        that answers --version (or `binary`, a shell script)."""
+        that answers --version (or `binary`, a shell script), plus `extra_files`
+        ({name: text}) next to it."""
         import hashlib, io, tarfile
         self.latest = version
         script = binary or f"#!/bin/sh\necho {version}\n"
@@ -1681,6 +1689,10 @@ class FakeReleases:
             info = tarfile.TarInfo("await")
             info.size, info.mode = len(script), 0o644   # like the old archives: not executable
             tar.addfile(info, io.BytesIO(script.encode()))
+            for name, text in (extra_files or {}).items():
+                info = tarfile.TarInfo(name)
+                info.size, info.mode = len(text.encode()), 0o644
+                tar.addfile(info, io.BytesIO(text.encode()))
         archive = f"await-{version}-{target}.tar.gz"
         self.files[f"/releases/download/{version}/{archive}"] = buf.getvalue()
         if sums:
@@ -1893,6 +1905,55 @@ class TestSelfUpdate:
         returncode, err = self.update()
         assert returncode == 0, err
         assert running.wait(timeout=10) == 0
+
+    def man_page(self, text=None):
+        """<prefix>/share/man/man1/await.1 next to <prefix>/bin/await; `text` creates it."""
+        path = os.path.join(self.dir, "share", "man", "man1", "await.1")
+        if text is not None:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        return path
+
+    def test_installed_man_page_is_refreshed(self):
+        page = self.man_page(".TH AWAIT 1 old\n")
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert open(page).read() == ".TH AWAIT 1 new\n"
+        assert os.listdir(os.path.dirname(page)) == ["await.1"]       # no temp file left behind
+
+    def test_man_page_is_not_created(self):
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert not os.path.exists(os.path.join(self.dir, "share"))
+
+    def test_man_page_symlink_is_not_written_through(self):
+        target = os.path.join(self.dir, "elsewhere.1")
+        with open(target, "w") as f:
+            f.write("mine\n")
+        page = self.man_page()
+        os.makedirs(os.path.dirname(page))
+        os.symlink(target, page)
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert os.path.islink(page) and open(target).read() == "mine\n"
+
+    def test_read_only_man_page_does_not_fail_the_update(self):
+        if os.geteuid() == 0:
+            pytest.skip("root can write anywhere")
+        page = self.man_page(".TH AWAIT 1 old\n")
+        os.chmod(page, 0o444)
+        os.chmod(os.path.dirname(page), 0o555)
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert "couldn't update the man page" in err
+        assert open(page).read() == ".TH AWAIT 1 old\n"
 
     def test_already_up_to_date(self):
         self.releases.publish(self.version)

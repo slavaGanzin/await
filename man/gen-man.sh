@@ -161,8 +161,7 @@ END {
 
   print ".SH DESCRIPTION"
   print ".B await"
-  print esc("runs each of the given shell commands in parallel, repeatedly, until they")
-  print esc("return the expected status, then exits.")
+  text("runs each of the given shell commands in parallel, repeatedly. By default it exits once all of them return the expected status; options such as --change, --any and --forever change when it stops.")
   for (i = 1; i <= npre; i++) { print ".PP"; text(sentence(trim(pre[i]))) }
   if (("NOTES", 1) in lines) split_notes("NOTES")
   for (g = 1; g <= ng; g++) {

@@ -4,7 +4,7 @@
 
 ### New Features
 
-- **`man await`**: an `await(1)` man page, generated at build time from `--help` (so it never drifts from it), installed by `cmake --install` and shipped in every release archive.
+- **`man await`**: an `await(1)` man page, generated at build time from `--help` (so it never drifts from it), installed by `cmake --install` and shipped in every release archive; `await --update` also refreshes an installed one (`<prefix>/share/man/man1/await.1` next to `<prefix>/bin/await`).
 
 ### Changes
 
