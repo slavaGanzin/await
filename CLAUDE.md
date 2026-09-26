@@ -28,6 +28,8 @@ cp build/await ./await
 cd tests && pytest test_await.py -v
 ```
 
+`tests/update_e2e.sh [./await]` (run in CI on every build) installs the real latest GitHub release over the given build with `await --update`, forced by the undocumented `AWAIT_UPDATE_FORCE=1` since a build is never older than the release. It needs network access.
+
 ## Version
 
 Version is `AWAIT_VERSION` at the top of `await.c`; it is also what the update notifier compares against the latest GitHub release.

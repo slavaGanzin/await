@@ -1254,7 +1254,7 @@ int run_update(void) {
     return 1;
   }
   const char *script = UPDATE_SH_HELPERS
-    "self=$1 cur=$2 base=$3 target=$4\n"
+    "self=$1 cur=$2 base=$3 target=$4 force=$5\n"
     "say() { printf 'await: %s\\n' \"$*\" >&2; }\n"
     "case \"$self\" in\n"
     "  /nix/store/*) say \"installed by Nix ($self): update it through Nix\"; exit 3;;\n"
@@ -1268,7 +1268,7 @@ int run_update(void) {
     "new=${tag#v}\n"
     "newer() { awk -v a=\"$1\" -v b=\"$2\" 'BEGIN { n = split(a, x, \".\"); m = split(b, y, \".\"); if (m > n) n = m;"
     " for (i = 1; i <= n; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 } exit 1 }'; }\n"
-    "newer \"$new\" \"$cur\" || { say \"already up to date ($cur)\"; exit 0; }\n"
+    "[ -n \"$force\" ] || newer \"$new\" \"$cur\" || { say \"already up to date ($cur)\"; exit 0; }\n"
     "dir=$(dirname \"$self\")\n"
     "[ -w \"$dir\" ] || { say \"no permission to replace $self; run: sudo $self --update\"; exit 6; }\n"
     // one update at a time (a manual one and a background one could otherwise
@@ -1308,7 +1308,11 @@ int run_update(void) {
   fflush(stderr);
   pid_t pid = fork();
   if (pid == 0) {
-    execl("/bin/sh", "sh", "-c", script, "await-update", self, AWAIT_VERSION, releases_url(), release_target(), NULL);
+    // AWAIT_UPDATE_FORCE (CI only, undocumented): install the latest release even
+    // if it isn't newer, to exercise a real update from a fresh build
+    const char *force = getenv("AWAIT_UPDATE_FORCE");
+    execl("/bin/sh", "sh", "-c", script, "await-update", self, AWAIT_VERSION, releases_url(), release_target(),
+          force && *force && strcmp(force, "0") != 0 ? "1" : "", NULL);
     _exit(127);
   }
   if (pid < 0) {

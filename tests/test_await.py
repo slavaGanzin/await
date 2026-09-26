@@ -1736,6 +1736,7 @@ class TestSelfUpdate:
                     "XDG_CACHE_HOME": self.dir}
         self.env.pop("AWAIT_NO_UPDATE_CHECK", None)
         self.env.pop("AWAIT_AUTO_UPDATE", None)
+        self.env.pop("AWAIT_UPDATE_FORCE", None)
 
     def teardown_method(self):
         import shutil
@@ -1818,6 +1819,33 @@ class TestSelfUpdate:
         returncode, err = self.update()
         assert returncode != 0
         assert "has no test-target build" in err
+        self.assert_untouched()
+
+    def test_forced_update_reinstalls_the_same_or_an_older_release(self):
+        """AWAIT_UPDATE_FORCE (CI's end-to-end check) installs the latest release
+        even when it isn't newer, through the same verified path."""
+        import shutil
+        force = {**self.env, "AWAIT_UPDATE_FORCE": "1"}
+        for version in (self.version, "1.0.0"):
+            shutil.copy("../await", self.binary)            # the real await, not the last stand-in
+            self.releases.publish(version)
+            returncode, err = self.update(env=force)
+            assert returncode == 0, err
+            assert f"updated {self.version} -> {version}" in err
+            assert open(self.binary).read() == f"#!/bin/sh\necho {version}\n"
+            assert self.installed_version(self.binary + ".old") == self.version
+        # still verified: a forced install of a bad archive is refused
+        shutil.copy("../await", self.binary)
+        self.releases.publish("1.0.0", checksum="0" * 64)
+        returncode, err = self.update(env=force)
+        assert returncode != 0 and "checksum mismatch" in err
+        assert self.installed_version() == self.version
+
+    def test_force_is_off_when_empty_or_zero(self):
+        self.releases.publish(self.version)
+        for value in ("", "0"):
+            returncode, err = self.update(env={**self.env, "AWAIT_UPDATE_FORCE": value})
+            assert returncode == 0 and "already up to date" in err, value
         self.assert_untouched()
 
     def test_unsupported_platform(self):
