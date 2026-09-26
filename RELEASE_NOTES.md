@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **`man await`**: an `await(1)` man page, generated at build time from `--help` (so it never drifts from it), installed by `cmake --install` and shipped in every release archive.
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.

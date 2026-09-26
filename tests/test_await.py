@@ -1084,6 +1084,122 @@ class TestSignalHandling:
                 proc.kill()
 
 
+class TestManPage:
+    """The man page is generated from --help by man/gen-man.sh (at build time)."""
+
+    GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'man', 'gen-man.sh')
+    AWAIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'await')
+
+    @staticmethod
+    def _gen(binary):
+        r = subprocess.run(['sh', TestManPage.GEN, binary], capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    @pytest.fixture(scope='class')
+    def page(self):
+        return self._gen(self.AWAIT)
+
+    @pytest.fixture(scope='class')
+    def page_file(self, page, tmp_path_factory):
+        path = tmp_path_factory.mktemp('man') / 'await.1'
+        path.write_text(page)
+        return str(path)
+
+    @staticmethod
+    def _help():
+        r = subprocess.run([TestManPage.AWAIT, '--help'], capture_output=True, text=True,
+                           env={**os.environ, 'NO_COLOR': '1'}, timeout=5)
+        return re.sub(r'\x1b\[[0-9;]*m', '', r.stdout)
+
+    @staticmethod
+    def _render(path):
+        """Render to plain text with mandoc or groff; None if neither is installed."""
+        for cmd in (['mandoc', '-Tutf8', '-O', 'width=200', path],
+                    ['groff', '-man', '-Tutf8', '-rLL=200n', path]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                                   env={**os.environ, 'GROFF_NO_SGR': '1'})
+            except FileNotFoundError:
+                continue
+            assert r.returncode == 0, r.stderr
+            return re.sub(r'.\x08', '', r.stdout)
+        return None
+
+    def test_every_help_option_is_documented(self, page):
+        help_opts = re.findall(r'^\s+(--[\w-]+(?:\s+-\w)?)\s*#', self._help(), re.M)
+        assert len(help_opts) > 10
+        # .TP tags: \fB\-\-stdout\fR, \fB\-o\fR
+        tags = re.findall(r'^\.TP\n(.*)$', page, re.M)
+        man_opts = {' '.join(re.findall(r'\\fB(.*?)\\fR', t)).replace('\\-', '-') for t in tags}
+        for opt in help_opts:
+            assert ' '.join(opt.split()) in man_opts, opt
+
+    def test_new_options_are_picked_up(self, tmp_path):
+        """Options are parsed from --help, not hardcoded."""
+        fake = tmp_path / 'await'
+        fake.write_text(
+            "#!/bin/sh\n"
+            "[ \"$1\" = --version ] && { echo 9.9.9; exit 0; }\n"
+            "printf 'await [options] commands\\n\\n# runs things\\n\\n\\nOPTIONS:\\n"
+            "  --help\\t\\t#print this help\\n  --brand-new -N\\t#a flag added later\\n\\n\\n"
+            "NOTES:\\n# set NO_COLOR=1 to disable colors\\n'\n")
+        fake.chmod(0o755)
+        page = self._gen(str(fake))
+        assert '\\fB\\-\\-brand\\-new\\fR, \\fB\\-N\\fR\nA flag added later.' in page
+        assert '"await 9.9.9"' in page
+
+    def test_lint_clean(self, page_file):
+        for cmd in (['mandoc', '-Tlint', '-W', 'warning', page_file],
+                    ['groff', '-man', '-Tutf8', '-ww', '-z', page_file]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            except FileNotFoundError:
+                continue
+            assert r.returncode == 0 and not (r.stdout + r.stderr).strip(), r.stdout + r.stderr
+            return
+        pytest.skip('neither mandoc nor groff is installed')
+
+    def test_renders_name_and_examples(self, page_file):
+        text = self._render(page_file)
+        if text is None:
+            pytest.skip('neither mandoc nor groff is installed')
+        assert re.search(r'^\s*await - runs list of commands', text, re.M)
+        # backslashes, quotes and hyphens survive as typed, so examples copy-paste
+        assert "await 'curl google.com' --fail" in text
+        assert "'expr \\1 + \\2' --exec 'echo \\3'" in text
+        for section in ('NAME', 'SYNOPSIS', 'DESCRIPTION', 'OPTIONS', 'ENVIRONMENT', 'EXAMPLES'):
+            assert re.search(rf'^{section}$', text, re.M), section
+
+    def test_no_ansi_and_troff_safe(self, page):
+        assert '\x1b' not in page
+        for line in page.splitlines():
+            assert not line.startswith("'"), line
+            if line.startswith('.'):
+                assert re.match(r'\.(\\"|(TH|SH|TP|PP|RS|RE|nf|fi|B|BR)( |$))', line), line
+
+    def test_environment(self, page):
+        env = page.split('.SH ENVIRONMENT', 1)[1].split('.SH ', 1)[0]
+        for var in ('NO_COLOR', 'AWAIT_NO_UPDATE_CHECK', 'AWAIT_AUTO_UPDATE'):
+            assert f'\\fB{var}\\fR' in env, var
+        for hidden in ('AWAIT_UPDATE_FORCE', 'AWAIT_RELEASES_URL', 'AWAIT_UPDATE_TARGET'):
+            assert hidden not in page
+
+    def test_version_matches(self, page):
+        version = subprocess.run([self.AWAIT, '--version'], capture_output=True, text=True).stdout.strip()
+        assert re.search(rf'^\.TH AWAIT 1 "[^"]*" "await {re.escape(version)}"', page, re.M)
+
+    def test_build_page_matches_binary(self):
+        """build/await.1 (made by cmake) is the same page the generator gives today."""
+        built = os.path.join(os.path.dirname(self.AWAIT), 'build', 'await.1')
+        binary = os.path.join(os.path.dirname(self.AWAIT), 'build', 'await')
+        if not (os.path.exists(built) and os.path.exists(binary)):
+            pytest.skip('no build/await.1')
+        strip_date = lambda s: re.sub(r'^(\.TH AWAIT 1) "[^"]*"', r'\1', s, flags=re.M)
+        with open(built) as f:
+            assert strip_date(f.read()) == strip_date(self._gen(binary))
+
+
 class TestAutocompletion:
     """Test autocompletion script generation."""
 
