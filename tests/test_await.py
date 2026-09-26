@@ -2019,28 +2019,32 @@ class TestSelfUpdate:
 class TestExpect:
     """--expect REGEX: a command succeeds when its stdout matches, whatever it exits with."""
 
-    COUNTER = 'n=$(cat {f} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {f}; echo count $n'
+    # prints count 1, count 2 ... up to count <top>, then keeps printing that:
+    # await samples each command's latest result, so a match lasting a single
+    # run could be missed on a loaded machine; the final output must be stable
+    COUNTER = ('n=$(cat {f} 2>/dev/null || echo 0); [ "$n" -lt {top} ] && n=$((n+1)); '
+               'echo $n > {f}; echo count $n')
 
-    def run(self, *argv, timeout=5):
+    def run(self, *argv, timeout=10):
         return subprocess.run(["../await", *argv], capture_output=True, text=True, timeout=timeout)
 
-    def counter(self):
+    def counter(self, top):
         fd, path = tempfile.mkstemp(dir=TMPDIR)
         os.close(fd)
         os.unlink(path)
-        return path, self.COUNTER.format(f=path)
+        return path, self.COUNTER.format(f=path, top=top)
 
     def test_matches_on_first_try(self):
         r = self.run('echo \'{"status": "up"}\'', "--expect", '"status": *"up"', "-V")
         assert r.returncode == 0, r.stderr
 
     def test_waits_until_output_matches(self):
-        path, cmd = self.counter()
+        path, cmd = self.counter(3)
         try:
-            r = self.run(cmd, "-x", "count 3$", "-i", "0.05", "-T", "3", "-V")
+            r = self.run(cmd, "-x", "count 3$", "-i", "0.05", "-T", "5", "--json")
             assert r.returncode == 0, r.stderr
-            with open(path) as f:
-                assert f.read().strip() == "3"
+            import json
+            assert json.loads(r.stdout.strip())["commands"][0]["output"] == "count 3\n"
         finally:
             os.unlink(path)
 
@@ -2093,12 +2097,20 @@ class TestExpect:
         assert json.loads(r.stdout.strip())["commands"][0]["status"] == 124
 
     def test_change_counts_only_changes_to_matching_output(self):
-        path, cmd = self.counter()
+        import json
+        # count 1 (baseline) -> count 2 (a change, but no match): keeps waiting
+        path, cmd = self.counter(2)
         try:
-            r = self.run(cmd, "-c", "-x", "count [3-9]", "-i", "0.05", "-T", "3", "-V")
+            r = self.run(cmd, "-c", "-x", "count [3-9]", "-i", "0.05", "-T", "1.5", "-V")
+            assert r.returncode == 1
+        finally:
+            os.unlink(path)
+        # ... -> count 3 (a change to matching output): done
+        path, cmd = self.counter(3)
+        try:
+            r = self.run(cmd, "-c", "-x", "count [3-9]", "-i", "0.05", "-T", "5", "--json")
             assert r.returncode == 0, r.stderr
-            with open(path) as f:
-                assert f.read().strip() == "3"
+            assert json.loads(r.stdout.strip())["commands"][0]["output"] == "count 3\n"
         finally:
             os.unlink(path)
 
