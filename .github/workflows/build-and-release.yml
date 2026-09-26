@@ -216,6 +216,8 @@ jobs:
         mkdir -p windows-msys
         cp build/await.exe build/await.fish build/await.bash build/await.zsh windows-msys/
         cp build/await.exe ./await.exe
+        # tests run ../await, which is otherwise the tracked macOS binary
+        cp build/await.exe ./await
 
     - name: Run tests
       working-directory: tests
