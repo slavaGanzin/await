@@ -44,6 +44,7 @@ typedef struct {
   size_t outPos;
   size_t outCap;
   _Atomic int status;
+  _Atomic int timed_out; // the last run was killed by --cmd-timeout
   int change;
   int warned127;
   _Atomic int pid;       // the command's running shell, 0 when none
@@ -562,11 +563,11 @@ char * output_snapshot(COMMAND *cmd) {
   return copy;
 }
 
-// what an exit status usually means, for messages ("" when nothing special)
-const char *status_note(int status) {
-  if (status == 127) return " (command not found)";
-  if (status == 126) return " (not executable / permission denied)";
-  if (status == 124 && args.cmd_timeout > 0) return " (--cmd-timeout)";
+// what a command's last exit status means, for messages ("" when nothing special)
+const char *status_note(COMMAND *cmd) {
+  if (cmd->timed_out) return " (--cmd-timeout)";
+  if (cmd->status == 127) return " (command not found)";
+  if (cmd->status == 126) return " (not executable / permission denied)";
   return "";
 }
 
@@ -1075,6 +1076,7 @@ void *shell(void * arg) {
 
   char buf[BUF_SIZE];
   int run_status = -1;
+  int timed_out = 0;
   wait_for_dependencies(c);
   while (1) {
     pthread_mutex_lock(&c->lock);
@@ -1132,7 +1134,7 @@ void *shell(void * arg) {
 
     run_status = -1;
     long deadline = args.cmd_timeout > 0 ? c->start_time + args.cmd_timeout * 1000L : 0;
-    int timed_out = 0;
+    timed_out = 0;
     while (1) {
       if (deadline) {
         long left = deadline - current_time_ms();
@@ -1193,6 +1195,7 @@ void *shell(void * arg) {
     // publish status, run and change only once previousOut holds this run's
     // output, so whoever acts on them (--exec, --json, \1) sees that output
     c->status = run_status;
+    c->timed_out = timed_out;
     c->runs++;
     if (changed) c->changes++;
     pthread_mutex_unlock(&c->lock);
@@ -1486,8 +1489,10 @@ void stop_running_commands(void) {
  *   6. a terminal bell
  * Notifiers run without a shell (posix_spawnp, argv), with stdio on /dev/null;
  * the whole chain gets NOTIFY_BUDGET_MS, and a notifier still running after
- * that is killed (with its process group) and counts as failed, so a broken
- * notifier never delays exit by more than that or changes the exit code. */
+ * that is killed (with its process group) and counts as failed. Terminal
+ * writes are non-blocking within the same budget (a terminal stopped with
+ * Ctrl-S just fails the step). So a broken notifier or terminal never delays
+ * exit by more than that or changes the exit code. */
 #define NOTIFY_BUDGET_MS 2000
 #define NOTIFY_BODY_MAX 200
 #define NOTIFY_LABEL_MAX 60
@@ -1556,7 +1561,7 @@ void describe_command(int i, char **s, size_t *len) {
   int status = c[i].status;
   if (args.change) sappendf(s, len, "%s %s", label, not_done_cmd(i) ? "didn't change" : "changed");
   else if (status == -1) sappendf(s, len, "%s never finished", label);
-  else sappendf(s, len, "%s exited %d%s", label, status, status_note(status));
+  else sappendf(s, len, "%s exited %d%s", label, status, status_note(&c[i]));
   free(label);
 }
 
@@ -1627,13 +1632,23 @@ static int term_notifier(void) {
 // the controlling terminal, or AWAIT_NOTIFY_TTY (tests); -1 if none
 static int open_tty(void) {
   const char *path = getenv("AWAIT_NOTIFY_TTY");
-  return open(path && *path ? path : "/dev/tty", O_WRONLY | O_APPEND | O_NOCTTY | O_CLOEXEC);
+  // non-blocking: a terminal stopped by flow control (Ctrl-S) or a FIFO
+  // without a reader must not hold up exit
+  return open(path && *path ? path : "/dev/tty", O_WRONLY | O_APPEND | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
 }
 
-static int write_all(int fd, const char *s, size_t n) {
+// write all of s to non-blocking fd, waiting for room until deadline; -1 if it can't
+static int write_all(int fd, const char *s, size_t n, long deadline) {
   while (n > 0) {
     ssize_t k = write(fd, s, n);
     if (k < 0 && errno == EINTR) continue;
+    if (k < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      long left = deadline - current_time_ms();
+      if (left <= 0) return -1;
+      struct pollfd pfd = {fd, POLLOUT, 0};
+      if (poll(&pfd, 1, (int)left) < 0 && errno != EINTR) return -1;
+      continue;
+    }
     if (k <= 0) return -1;
     s += k;
     n -= k;
@@ -1644,13 +1659,13 @@ static int write_all(int fd, const char *s, size_t n) {
 // write escape sequence seq to the terminal; inside tmux wrapped in its DCS
 // passthrough (ESC P tmux; ... ESC \, every ESC inside doubled), which tmux
 // forwards to the outer terminal when allow-passthrough is on
-static int write_sequence(int fd, const char *seq) {
-  if (!env_set("TMUX")) return write_all(fd, seq, strlen(seq));
+static int write_sequence(int fd, const char *seq, long deadline) {
+  if (!env_set("TMUX")) return write_all(fd, seq, strlen(seq), deadline);
   char *wrapped = strdup("\033Ptmux;");
   size_t len = strlen(wrapped);
   for (const char *p = seq; *p; p++) sappendf(&wrapped, &len, *p == '\033' ? "\033\033" : "%c", *p);
   sappendf(&wrapped, &len, "\033\\");
-  int r = write_all(fd, wrapped, len);
+  int r = write_all(fd, wrapped, len, deadline);
   free(wrapped);
   return r;
 }
@@ -1662,7 +1677,7 @@ static char *without_semicolons(const char *s) {
   return copy;
 }
 
-static int notify_terminal(int fd, int osc, const char *title, const char *body) {
+static int notify_terminal(int fd, int osc, const char *title, const char *body, long deadline) {
   char *seq = strdup("");
   size_t len = 0;
   if (osc == OSC_99) {
@@ -1678,7 +1693,7 @@ static int notify_terminal(int fd, int osc, const char *title, const char *body)
     // Windows Terminal would read as an OSC 9;N subcommand
     sappendf(&seq, &len, "\033]9;%s: %s\a", title, body);
   }
-  int r = write_sequence(fd, seq);
+  int r = write_sequence(fd, seq, deadline);
   free(seq);
   return r;
 }
@@ -1835,13 +1850,13 @@ void notify(const char *fmt, ...) {
   int done = 0;
   int tty = open_tty();
   int osc = term_notifier();
-  if (tty >= 0 && osc >= 0) done = notify_terminal(tty, osc, title, body) == 0;
+  if (tty >= 0 && osc >= 0) done = notify_terminal(tty, osc, title, body, deadline) == 0;
   // over ssh an unknown terminal gets OSC 9 anyway (terminals ignore OSC
   // they don't know), and a bell in case it did
   if (!done && tty >= 0 && ssh)
-    done = notify_terminal(tty, OSC_9, title, body) == 0 && write_all(tty, "\a", 1) == 0;
+    done = notify_terminal(tty, OSC_9, title, body, deadline) == 0 && write_all(tty, "\a", 1, deadline) == 0;
   if (!done && !ssh) done = notify_native(title, body, deadline) == 0;
-  if (!done && tty >= 0) write_all(tty, "\a", 1);
+  if (!done && tty >= 0) write_all(tty, "\a", 1, deadline);
   if (tty >= 0) close(tty);
   free(title);
   free(body);
@@ -2092,7 +2107,7 @@ int main(int argc, char *argv[]) {
             if (c[i].status == -1) {
               fprintf(stderr, "  '%s': still running / no completed attempt\n", c[i].command);
             } else {
-              fprintf(stderr, "  '%s': last exit %d%s\n", c[i].command, c[i].status, status_note(c[i].status));
+              fprintf(stderr, "  '%s': last exit %d%s\n", c[i].command, c[i].status, status_note(&c[i]));
             }
           }
         }
