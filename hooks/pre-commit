@@ -165,6 +165,15 @@ await 'ps aux | head -10' --watch --interval 2
 await 'tail -5 /var/log/system.log' --watch
 \`\`\`
 
+### Don't react to a flapping service
+\`\`\`bash
+# Healthy only after 3 successful checks in a row; any failure starts the count over
+await 'curl -sf localhost:8080/health' --times 3 --interval 1
+
+# Page once per outage: 5 failed checks in a row, not every blip (and not every check after)
+await 'curl -sf https://myapp.com' --fail --times 5 --forever --exec 'ntfy send \"site is down\"'
+\`\`\`
+
 ## --help
 \`\`\`bash
 $(./build/await --help | sed 's/\x1b\[[0-9;]*m//g')

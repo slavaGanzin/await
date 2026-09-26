@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **`--times N`**: a command counts as done only after N successful checks in a row, and any unsuccessful check starts the count over, so a flapping service doesn't end the wait (`await 'curl -sf localhost:8080/health' --times 3 --interval 1`). With `--fail` it counts failures in a row; with `--forever`, `--exec` runs once each time a streak reaches N rather than on every check after; `--json` reports each command's `streak`.
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
