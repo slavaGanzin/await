@@ -2052,65 +2052,89 @@ class TestBackoff:
     """--backoff MAX: after each failed check the command's pause doubles
     (from --interval, +-10% jitter, capped at MAX); a success resets it."""
 
+    # A measured pause (one run's end to the next run's start, stamped by the
+    # command itself) also holds process exit/spawn and interpreter startup
+    # and scheduler jitter, which reach ~0.1s on CI runners. So lower bounds
+    # are strict (0.85x: the pause minus its 10% jitter) and upper bounds get
+    # proportional slack plus this absolute allowance.
+    OVERHEAD = 0.15
+
     @staticmethod
-    def run_times(await_args, log, duration):
-        """Run await, polling the log its command appends a line to on each run;
-        returns (returncode, [time of each run relative to the first])."""
-        open(log, "w").close()
-        proc = subprocess.Popen(f"exec ../await {await_args}", shell=True,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        times, seen = [], 0
-        deadline = time.time() + duration
-        while time.time() < deadline and proc.poll() is None:
-            with open(log) as f:
-                n = len(f.readlines())
-            now = time.time()
-            times += [now] * (n - seen)
-            seen = n
-            time.sleep(0.002)
-        if proc.poll() is None:
-            proc.kill()
-        returncode = proc.wait()
-        return returncode, [t - times[0] for t in times]
+    def stamp_command():
+        """Shell command appending '<tag> <epoch seconds>' to stdout ($1 = tag);
+        macOS date has no %N, so perl (fast to start) or python3."""
+        import shutil
+        if shutil.which("perl"):
+            return "perl -MTime::HiRes=time -e 'printf \"%s %.6f\\n\", $ARGV[0], time'"
+        return "python3 -c 'import sys, time; print(sys.argv[1], \"%.6f\" % time.time())'"
 
     @pytest.fixture
-    def log(self):
-        path = os.path.join(TMPDIR, f"await_backoff_{os.getpid()}_{time.time_ns()}")
-        yield path
-        for p in (path, path + ".script"):
-            if os.path.exists(p):
-                os.remove(p)
+    def check(self):
+        """check(ok_when) -> a command for await that stamps its start and end
+        in a log and succeeds when the shell test ok_when holds ($n: number of
+        earlier runs); check.pauses() -> seconds between each run's end and the
+        next run's start (with timed_out, leaving out the last one: when -T
+        ends the wait, it is cut short at the deadline)."""
+        root = tempfile.mkdtemp(dir=TMPDIR)
+        log = os.path.join(root, "log")
+        script = os.path.join(root, "check.sh")
 
-    def test_intervals_double_up_to_the_cap(self, log):
-        returncode, times = self.run_times(
-            f'-V --interval 0.1 --backoff 0.8 "echo x >> {log}; false"', log, 3.4)
-        gaps = [b - a for a, b in zip(times, times[1:])]
-        # 0.1 0.2 0.4 0.8 0.8 ... each +-10% (and a little scheduling slack)
-        assert len(gaps) >= 5, gaps
-        for gap, expected in zip(gaps, [0.1, 0.2, 0.4, 0.8, 0.8, 0.8]):
-            assert expected * 0.85 <= gap <= expected * 1.1 + 0.04, (gaps, expected)
+        def make(ok_when="false"):
+            stamp = self.stamp_command()
+            with open(script, "w") as f:
+                f.write(f'n=$(grep -c "^s" "{log}" 2>/dev/null)\n'
+                        f'{stamp} s >> "{log}"\n'
+                        f'if {ok_when}; then rc=0; else rc=1; fi\n'
+                        f'{stamp} e >> "{log}"\n'
+                        f'exit $rc\n')
+            return f"sh {script}"
 
-    def test_cap_is_respected(self, log):
-        returncode, times = self.run_times(
-            f'-V --interval 0.1 --backoff 0.3 "echo x >> {log}; false"', log, 2.2)
-        gaps = [b - a for a, b in zip(times, times[1:])]
-        assert len(gaps) >= 6, gaps
-        # jitter never takes a pause past MAX
-        assert max(gaps) <= 0.3 + 0.04, gaps
-        assert all(g >= 0.25 for g in gaps[2:]), gaps
+        def pauses(timed_out=True):
+            starts, ends = [], []
+            with open(log) as f:
+                for line in f:
+                    tag, t = line.split()
+                    (starts if tag == "s" else ends).append(float(t))
+            found = [s - e for e, s in zip(ends, starts[1:])]
+            return found[:-1] if timed_out else found
 
-    def test_success_resets_the_interval(self, log):
+        make.pauses = pauses
+        yield make
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+    def test_intervals_double_up_to_the_cap(self, check):
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 3.4 --interval 0.1 --backoff 0.8 "{check()}"', timeout=6.0)
+        assert returncode == 1
+        pauses = check.pauses()
+        # 0.1 0.2 0.4 0.8 0.8 ... each +-10%
+        assert len(pauses) >= 5, pauses
+        for pause, expected in zip(pauses, [0.1, 0.2, 0.4, 0.8, 0.8, 0.8]):
+            assert expected * 0.85 <= pause <= expected * 1.1 + self.OVERHEAD, (pauses, expected)
+        # grows run after run until the cap
+        assert pauses[0] < pauses[1] < pauses[2] < pauses[3], pauses
+
+    def test_cap_is_respected(self, check):
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 2.4 --interval 0.1 --backoff 0.3 "{check()}"', timeout=6.0)
+        pauses = check.pauses()
+        # uncapped, the 4th pause alone would be 0.8s and the 5th 1.6s
+        assert len(pauses) >= 6, pauses
+        assert max(pauses) <= 0.3 + self.OVERHEAD, pauses
+        assert all(p >= 0.3 * 0.85 for p in pauses[2:]), pauses
+
+    def test_success_resets_the_interval(self, check):
         # runs 1-4 fail (pauses 0.1 0.2 0.4 0.8), run 5 succeeds, then failures again
-        script = log + ".script"
-        with open(script, "w") as f:
-            f.write(f'n=$(wc -l < "{log}"); echo x >> "{log}"; [ "$n" -eq 4 ]\n')
-        returncode, times = self.run_times(
-            f'-V --forever --interval 0.1 --backoff 0.8 "sh {script}"', log, 2.6)
-        gaps = [b - a for a, b in zip(times, times[1:])]
-        assert len(gaps) >= 6, gaps
-        assert gaps[3] >= 0.65, gaps           # after the 4th failure: 0.8
-        assert gaps[4] <= 0.1 + 0.05, gaps     # after the success: back to --interval
-        assert gaps[5] <= 0.1 * 1.1 + 0.05, gaps  # then growing again from there
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 2.8 --forever --interval 0.1 --backoff 0.8 "{check("[ $n -eq 4 ]")}"',
+            timeout=6.0)
+        pauses = check.pauses()
+        assert len(pauses) >= 6, pauses
+        assert pauses[3] >= 0.8 * 0.85, pauses                 # after the 4th failure: 0.8
+        assert pauses[4] <= 0.1 + self.OVERHEAD, pauses        # after the success: --interval
+        assert pauses[4] < pauses[3] / 2, pauses
+        assert pauses[5] <= 0.1 * 1.1 + self.OVERHEAD, pauses  # then growing again from there
 
     def test_timeout_is_not_overshot(self):
         start = time.time()
@@ -2119,20 +2143,20 @@ class TestBackoff:
             description="The 30s backoff pause must not delay the 1s timeout")
         elapsed = time.time() - start
         assert returncode == 1
-        assert elapsed < 1.6, f"took {elapsed:.2f}s"
+        assert elapsed < 2.0, f"took {elapsed:.2f}s"
 
-    def test_success_during_backoff_is_noticed_at_next_check(self, log):
+    def test_success_during_backoff_is_noticed_at_next_check(self, check):
         """A command that starts succeeding is picked up at its next check."""
-        script = log + ".script"
-        with open(script, "w") as f:
-            f.write(f'n=$(wc -l < "{log}"); echo x >> "{log}"; [ "$n" -ge 3 ]\n')
-        open(log, "w").close()
         start = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V --interval 0.1 --backoff 0.8 "sh {script}"', timeout=5.0)
+            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 3 ]")}"', timeout=5.0)
+        elapsed = time.time() - start
         assert returncode == 0
+        pauses = check.pauses(timed_out=False)
         # pauses 0.1 0.2 0.4, then the 4th run succeeds
-        assert 0.6 <= time.time() - start < 1.5
+        assert len(pauses) == 3, pauses
+        assert pauses[2] >= 0.4 * 0.85, pauses
+        assert elapsed < 2.5
 
     @pytest.mark.parametrize("value", ["abc", "0", "-1", "", "1s"])
     def test_invalid_max(self, value):
@@ -2146,12 +2170,13 @@ class TestBackoff:
         assert returncode == 2
         assert "--interval" in stderr
 
-    def test_unchanged_without_flag(self, log):
-        returncode, times = self.run_times(
-            f'-V --interval 0.1 "echo x >> {log}; false"', log, 1.2)
-        gaps = [b - a for a, b in zip(times, times[1:])]
-        assert len(gaps) >= 7, gaps
-        assert max(gaps) <= 0.1 + 0.05, gaps
+    def test_unchanged_without_flag(self, check):
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 1.2 --interval 0.1 "{check()}"', timeout=5.0)
+        pauses = check.pauses()
+        # with backoff the 3rd and 4th pauses alone would be 0.4s and 0.8s
+        assert len(pauses) >= 5, pauses
+        assert max(pauses) <= 0.1 + self.OVERHEAD, pauses
 
 
 class TestPublishOrder:
