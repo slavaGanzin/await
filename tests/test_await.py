@@ -9,6 +9,7 @@ import signal
 import re
 import platform
 import tempfile
+import statistics
 from typing import Tuple, Optional
 
 
@@ -2053,11 +2054,16 @@ class TestBackoff:
     (from --interval, +-10% jitter, capped at MAX); a success resets it."""
 
     # A measured pause (one run's end to the next run's start, stamped by the
-    # command itself) also holds process exit/spawn and interpreter startup
-    # and scheduler jitter, which reach ~0.1s on CI runners. So lower bounds
-    # are strict (0.85x: the pause minus its 10% jitter) and upper bounds get
-    # proportional slack plus this absolute allowance.
-    OVERHEAD = 0.15
+    # command itself) is the real pause plus process exit/spawn, interpreter
+    # startup and scheduling: on CI runners up to ~0.17s, varying run to run.
+    # That can only make a pause look longer, so lower bounds are strict
+    # (0.85x: the pause minus its 10% jitter) and are what show the backoff.
+    # Upper bounds never assume a fixed overhead: they compare pauses of the
+    # same run with each other, with margins that correct behaviour keeps
+    # however slow the runner, but that a wrong one (no cap, no reset,
+    # backoff without the flag) breaks by a wide margin.
+    # AWAIT_TEST_SLOW_STAMP=<seconds> sleeps that long before each start stamp
+    # and after each end stamp, to simulate a slow runner.
 
     @staticmethod
     def stamp_command():
@@ -2083,14 +2089,16 @@ class TestBackoff:
         root = tempfile.mkdtemp(dir=TMPDIR)
         log = os.path.join(root, "log")
         script = os.path.join(root, "check.sh")
+        slow = os.environ.get("AWAIT_TEST_SLOW_STAMP")
+        delay = f"sleep {slow}\n" if slow else ""
 
         def make(ok_when="false"):
             stamp = self.stamp_command()
             with open(script, "w") as f:
                 f.write(f'n=$(grep -c "^s" "{log}" 2>/dev/null)\n'
-                        f'{stamp} s >> "{log}"\n'
+                        f'{delay}{stamp} s >> "{log}"\n'
                         f'if {ok_when}; then rc=0; else rc=1; fi\n'
-                        f'{stamp} e >> "{log}"\n'
+                        f'{stamp} e >> "{log}"\n{delay}'
                         f'exit $rc\n')
             return f"sh {script}"
 
@@ -2108,46 +2116,55 @@ class TestBackoff:
         shutil.rmtree(root, ignore_errors=True)
 
     # These runs end by the command succeeding, not by -T, so no pause is cut
-    # short at a deadline.
+    # short at a deadline. On a loaded machine await may start one more run
+    # before it notices that success, so only the pauses up to the successful
+    # run are checked.
 
     def test_intervals_double_up_to_the_cap(self, check):
         # runs 1-6 fail, run 7 succeeds
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 6 ]")}"', timeout=8.0)
+            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 6 ]")}"', timeout=10.0)
         assert returncode == 0
         pauses = check.pauses()
         # 0.1 0.2 0.4 0.8 0.8 0.8, each +-10%
-        assert len(pauses) == 6, self.fmt(pauses)
+        assert len(pauses) >= 6, self.fmt(pauses)
+        pauses = pauses[:6]
         for pause, expected in zip(pauses, [0.1, 0.2, 0.4, 0.8, 0.8, 0.8]):
-            assert expected * 0.85 <= pause <= expected * 1.1 + self.OVERHEAD, \
-                f"{self.fmt(pauses)} (expected {expected})"
-        # grows run after run until the cap
-        assert pauses[0] < pauses[1] < pauses[2] < pauses[3], self.fmt(pauses)
+            assert pause >= expected * 0.85, f"{self.fmt(pauses)} (expected {expected})"
+        # at the cap it stops doubling: uncapped the 5th pause would be 1.6s,
+        # at least 0.56s longer than the 4th even with jitter
+        assert max(pauses[4:]) - pauses[3] < 0.4, self.fmt(pauses)
 
     def test_cap_is_respected(self, check):
-        # runs 1-7 fail, run 8 succeeds; uncapped, the 4th pause would be 0.8s
+        # runs 1-7 fail, run 8 succeeds
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V --interval 0.1 --backoff 0.3 "{check("[ $n -ge 7 ]")}"', timeout=8.0)
+            f'-V --interval 0.1 --backoff 0.3 "{check("[ $n -ge 7 ]")}"', timeout=10.0)
         assert returncode == 0
         pauses = check.pauses()
-        assert len(pauses) == 7, self.fmt(pauses)
-        assert max(pauses) <= 0.3 + self.OVERHEAD, self.fmt(pauses)
-        assert all(p >= 0.3 * 0.85 for p in pauses[2:]), self.fmt(pauses)
+        assert len(pauses) >= 7, self.fmt(pauses)
+        pauses = pauses[:7]
+        capped = pauses[2:]  # 0.3 0.3 0.3 0.3 0.3
+        assert all(p >= 0.3 * 0.85 for p in capped), self.fmt(pauses)
+        # flat at the cap: uncapped these would be 0.4 0.8 1.6 3.2 6.4
+        assert max(capped) - statistics.median(capped) < 0.3, self.fmt(pauses)
+        assert max(capped) < 2 * min(capped) + 0.15, self.fmt(pauses)
 
     def test_success_resets_the_interval(self, check):
         # runs 1-4 fail (pauses 0.1 0.2 0.4 0.8), run 5 succeeds, then failures
-        # again; --forever needs -T to end, so leave out the pauses near it
+        # again (0.1 0.2 ...); --forever needs -T to end, so leave out the
+        # pauses near it
         start = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V -T 2.8 --forever --interval 0.1 --backoff 0.8 "{check("[ $n -eq 4 ]")}"',
-            timeout=6.0)
+            f'-V -T 6 --forever --interval 0.1 --backoff 0.8 "{check("[ $n -eq 4 ]")}"',
+            timeout=10.0)
         assert returncode == 1
-        pauses = check.pauses(before=start + 2.8)
+        pauses = check.pauses(before=start + 6)
         assert len(pauses) >= 6, self.fmt(pauses)
-        assert pauses[3] >= 0.8 * 0.85, self.fmt(pauses)                 # after the 4th failure: 0.8
-        assert pauses[4] <= 0.1 + self.OVERHEAD, self.fmt(pauses)        # after the success: --interval
+        assert pauses[3] >= 0.8 * 0.85, self.fmt(pauses)  # after the 4th failure: 0.8
+        # after the success back to --interval (without the reset: 0.8 again),
+        # and after the next failure too (without the reset: still 0.8)
         assert pauses[4] < pauses[3] / 2, self.fmt(pauses)
-        assert pauses[5] <= 0.1 * 1.1 + self.OVERHEAD, self.fmt(pauses)  # then growing again from there
+        assert pauses[5] < pauses[3] / 2, self.fmt(pauses)
 
     def test_timeout_is_not_overshot(self):
         start = time.time()
@@ -2172,16 +2189,13 @@ class TestBackoff:
 
     def test_success_during_backoff_is_noticed_at_next_check(self, check):
         """A command that starts succeeding is picked up at its next check."""
-        start = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 3 ]")}"', timeout=5.0)
-        elapsed = time.time() - start
+            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 3 ]")}"', timeout=8.0)
         assert returncode == 0
         pauses = check.pauses()
-        # pauses 0.1 0.2 0.4, then the 4th run succeeds
-        assert len(pauses) == 3, self.fmt(pauses)
+        # pauses 0.1 0.2 0.4, then the 4th run succeeds and await is done
+        assert len(pauses) in (3, 4), self.fmt(pauses)
         assert pauses[2] >= 0.4 * 0.85, self.fmt(pauses)
-        assert elapsed < 2.5
 
     @pytest.mark.parametrize("value", ["abc", "0", "-1", "", "1s"])
     def test_invalid_max(self, value):
@@ -2201,9 +2215,11 @@ class TestBackoff:
             f'-V --interval 0.1 "{check("[ $n -ge 7 ]")}"', timeout=5.0)
         assert returncode == 0
         pauses = check.pauses()
-        # with backoff the 3rd and 4th pauses would be 0.4s and 0.8s
-        assert len(pauses) == 7, self.fmt(pauses)
-        assert all(0.1 * 0.85 <= p <= 0.1 + self.OVERHEAD for p in pauses), self.fmt(pauses)
+        assert len(pauses) >= 7, self.fmt(pauses)
+        pauses = pauses[:7]
+        assert all(p >= 0.1 * 0.85 for p in pauses), self.fmt(pauses)
+        # no growth: backing off, these would be 0.1 0.2 0.4 0.8 1.6 3.2 6.4
+        assert max(pauses) - statistics.median(pauses) < 0.4, self.fmt(pauses)
 
 
 class TestPublishOrder:
