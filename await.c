@@ -20,6 +20,7 @@
 #include <spawn.h>
 #include <poll.h>
 #include <sys/utsname.h>
+#include <regex.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -83,6 +84,8 @@ typedef struct {
   int retry;
   int json;
   int lap;
+  char *expect;     // --expect: success is stdout matching this regex
+  regex_t expect_re;
 } ARGS;
 
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0, .cmd_timeout=0, .retry=0};
@@ -148,6 +151,7 @@ void print_autocomplete_fish() {
          "complete -c await -l name -s n -d 'Label for the next command (usable as \\\\name in --exec)' -r\n"
          "complete -c await -l json -s j -d 'Output results as JSON on exit'\n"
          "complete -c await -l lap -s l -d 'Show last run duration per command in spinner'\n"
+         "complete -c await -l expect -s x -d 'Succeed when stdout matches this extended regex (exit status ignored)' -r\n"
          "complete -c await -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
          "complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
          "complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
@@ -163,14 +167,14 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --update\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --expect --update\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --exec)\n"
          "            COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
-         "        --status|--interval|--timeout|--cmd-timeout|--retry|--name|--service)\n"
+         "        --status|--interval|--timeout|--cmd-timeout|--retry|--name|--service|--expect)\n"
          "            return 0\n"
          "            ;;\n"
          "    esac\n"
@@ -215,6 +219,7 @@ void print_autocomplete_zsh() {
          "    '--name[Label for the next command]:name:' \\\n"
          "    '--json[Output results as JSON on exit]' \\\n"
          "    '--lap[Show last run duration per command in spinner]' \\\n"
+         "    '--expect[Succeed when stdout matches this extended regex (exit status ignored)]:regex:' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]:service name:'\n"
          "}\n"
@@ -715,6 +720,10 @@ void help() {
   "  await 'gh run view --exit-status' --timeout 1800 --interval 30 \\\n\t--exec 'gh pr merge --auto --squash'\n\n"
   "# connect to whichever replica answers first\n"
   "  await 'curl -sf primary.db/health' 'curl -sf replica.db/health' --any --exec connect_to_db\n\n"
+  "# wait until the service reports it is up, whatever curl exits with\n"
+  "  await 'curl -s localhost:8080/health' --expect '\"status\": *\"up\"'\n\n"
+  "# wait for a line in the log\n"
+  "  await 'tail -n 20 app.log' --expect 'Server started'\n\n"
   "# waiting google (or your internet connection) to fail\n"
   "  await 'curl google.com' --fail\n\n"
   "# waiting only google to fail (https://ec.haxx.se/usingcurl/usingcurl-returns)\n"
@@ -747,6 +756,7 @@ void help() {
   "  --name -n\t\t#label for the next command (shown in spinner, usable as \\name in --exec)\n"
   "  --json -j\t\t#output results as JSON on exit\n"
   "  --lap -l\t\t#show last run duration per command in spinner\n"
+  "  --expect -x\t\t#succeed when stdout matches this POSIX extended regex (^ and $ match at each line; exit status is ignored)\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
   "  --update\t\t#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)\n"
@@ -859,6 +869,7 @@ void parse_args(int argc, char *argv[]) {
             {"name",  required_argument, 0, 'n'},
             {"json",  no_argument,       0, 'j'},
             {"lap",   no_argument,       0, 'l'},
+            {"expect", required_argument, 0, 'x'},
             {"update", no_argument, 0, 0},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
@@ -868,7 +879,7 @@ void parse_args(int argc, char *argv[]) {
           };
 
         int option_index = 0;
-        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ewn:jl", long_options, &option_index);
+        getopt = getopt_long(argc, argv, "oVafFchdvS:s:e:i:T:t:r:Ewn:jlx:", long_options, &option_index);
 
         if (getopt == -1)
           break;
@@ -951,8 +962,21 @@ void parse_args(int argc, char *argv[]) {
           case 'n': names[names_count++] = optarg; break;
           case 'j': args.json = 1; break;
           case 'l': args.lap = 1; break;
+          case 'x': args.expect = optarg; break;
         }
       }
+
+    if (args.expect) {
+      int err = regcomp(&args.expect_re, args.expect, REG_EXTENDED | REG_NOSUB | REG_NEWLINE);
+      if (err) {
+        char msg[256];
+        regerror(err, &args.expect_re, msg, sizeof(msg));
+        fprintf(stderr, "await: invalid --expect regex '%s': %s\n", args.expect, msg);
+        exit(2);
+      }
+      // a run's status is 0 when its stdout matches, so that is what we wait for
+      args.expectedStatus = 0;
+    }
 
     if (!args.exec && args.daemonize)
       printf("NOTICE: --daemon is kinda meaningless without --exec 'command'");
@@ -1138,6 +1162,11 @@ void *shell(void * arg) {
     c->pid = 0;
     // 124 like timeout(1); published below together with the output
     run_status = timed_out ? 124 : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+    // --expect: the run succeeds (status 0) when its stdout matches, whatever
+    // it exited with, and has status 1 when it doesn't; a timed-out run keeps 124
+    int expect_status = -1;
+    if (args.expect && !timed_out)
+      expect_status = regexec(&args.expect_re, c->out, 0, NULL, 0) == 0 ? 0 : 1;
     if (run_status == 127 && !c->warned127) {
       c->warned127 = 1;
       fprintf(stderr, "\nawait: '%s' exited with 127 (command not found).\n"
@@ -1146,6 +1175,7 @@ void *shell(void * arg) {
     }
     c->prev_duration_ms = c->last_duration_ms;
     c->last_duration_ms = current_time_ms() - c->start_time;
+    if (expect_status >= 0) run_status = expect_status;
     }
 
     // out/previousOut are only written by this thread, so comparing and
@@ -1164,7 +1194,8 @@ void *shell(void * arg) {
     // output, so whoever acts on them (--exec, --json, \1) sees that output
     c->status = run_status;
     c->runs++;
-    if (changed) c->changes++;
+    // with --expect only a change to matching output counts
+    if (changed && (!args.expect || run_status == 0)) c->changes++;
     pthread_mutex_unlock(&c->lock);
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
@@ -1665,6 +1696,8 @@ int main(int argc, char *argv[]) {
           for (int i = 1; i <= args.nCommands; i++) {
             if (c[i].status == -1) {
               fprintf(stderr, "  '%s': still running / no completed attempt\n", c[i].command);
+            } else if (args.expect && c[i].status != 124) {
+              fprintf(stderr, "  '%s': last output %s --expect\n", c[i].command, c[i].status == 0 ? "matched" : "did not match");
             } else if (c[i].status == 127) {
               fprintf(stderr, "  '%s': last exit 127 (command not found)\n", c[i].command);
             } else if (c[i].status == 126) {

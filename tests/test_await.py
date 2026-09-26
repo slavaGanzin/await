@@ -2016,6 +2016,117 @@ class TestSelfUpdate:
         assert self.wait_for(lambda: not os.path.exists(error))
 
 
+class TestExpect:
+    """--expect REGEX: a command succeeds when its stdout matches, whatever it exits with."""
+
+    COUNTER = 'n=$(cat {f} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {f}; echo count $n'
+
+    def run(self, *argv, timeout=5):
+        return subprocess.run(["../await", *argv], capture_output=True, text=True, timeout=timeout)
+
+    def counter(self):
+        fd, path = tempfile.mkstemp(dir=TMPDIR)
+        os.close(fd)
+        os.unlink(path)
+        return path, self.COUNTER.format(f=path)
+
+    def test_matches_on_first_try(self):
+        r = self.run('echo \'{"status": "up"}\'', "--expect", '"status": *"up"', "-V")
+        assert r.returncode == 0, r.stderr
+
+    def test_waits_until_output_matches(self):
+        path, cmd = self.counter()
+        try:
+            r = self.run(cmd, "-x", "count 3$", "-i", "0.05", "-T", "3", "-V")
+            assert r.returncode == 0, r.stderr
+            with open(path) as f:
+                assert f.read().strip() == "3"
+        finally:
+            os.unlink(path)
+
+    def test_nonzero_exit_with_match_succeeds(self):
+        r = self.run("echo ready; exit 3", "-x", "ready", "-T", "2", "-V")
+        assert r.returncode == 0, r.stderr
+
+    def test_zero_exit_without_match_keeps_waiting(self):
+        r = self.run("echo nope", "-x", "ready", "-i", "0.05", "-T", "0.5")
+        assert r.returncode == 1
+        assert "did not match --expect" in r.stderr
+
+    def test_fail_waits_for_output_not_to_match(self):
+        assert self.run("echo nope; exit 1", "-x", "ready", "-f", "-T", "2", "-V").returncode == 0
+        assert self.run("echo ready", "-x", "ready", "-f", "-i", "0.05", "-T", "0.5", "-V").returncode == 1
+
+    def test_all_commands_must_match(self):
+        assert self.run("echo a1", "echo a2", "-x", "^a", "-T", "2", "-V").returncode == 0
+        assert self.run("echo a", "echo b", "-x", "^a", "-i", "0.05", "-T", "0.5", "-V").returncode == 1
+
+    def test_any_needs_one_match(self):
+        assert self.run("echo a", "echo b", "-x", "^a", "--any", "-T", "2", "-V").returncode == 0
+
+    def test_invalid_regex_exits_2(self):
+        r = self.run("echo x", "--expect", "(")
+        assert r.returncode == 2
+        assert "invalid --expect regex" in r.stderr
+
+    def test_stderr_is_not_matched(self):
+        r = self.run("echo ready >&2", "-x", "ready", "-i", "0.05", "-T", "0.5", "-V")
+        assert r.returncode == 1
+
+    def test_json_status_reflects_match(self):
+        import json
+        r = self.run("echo ready; exit 5", "-x", "ready", "--json")
+        assert r.returncode == 0, r.stderr
+        data = json.loads(r.stdout.strip())
+        assert data["success"] is True
+        assert data["commands"][0]["status"] == 0
+        r = self.run("echo nope", "-x", "ready", "--json", "-i", "0.05", "-T", "0.5")
+        assert r.returncode == 1
+        data = json.loads(r.stdout.strip())
+        assert data["success"] is False
+        assert data["commands"][0]["status"] == 1
+
+    def test_cmd_timeout_is_unsuccessful(self):
+        import json
+        r = self.run("echo ready; sleep 5", "-x", "ready", "-t", "1", "-r", "1", "--json")
+        assert r.returncode == 1
+        assert json.loads(r.stdout.strip())["commands"][0]["status"] == 124
+
+    def test_change_counts_only_changes_to_matching_output(self):
+        path, cmd = self.counter()
+        try:
+            r = self.run(cmd, "-c", "-x", "count [3-9]", "-i", "0.05", "-T", "3", "-V")
+            assert r.returncode == 0, r.stderr
+            with open(path) as f:
+                assert f.read().strip() == "3"
+        finally:
+            os.unlink(path)
+
+    def test_exec_sees_matching_output(self):
+        r = self.run("echo ready; exit 1", "-x", "ready", "--exec", "echo got \\1", "-V")
+        assert r.returncode == 0, r.stderr
+        assert "got ready" in r.stdout
+
+    def test_service_replays_quoted_regex(self):
+        root = tempfile.mkdtemp()
+        bindir = os.path.join(root, "stub")
+        os.mkdir(bindir)
+        for stub in ("systemctl", "journalctl"):
+            path = os.path.join(bindir, stub)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(path, 0o755)
+        result = subprocess.run(
+            ["../await", "--expect", '"up" \\d$', "echo up", "--service", "t"],
+            env={**os.environ, "HOME": root, "PATH": bindir + ":" + os.environ["PATH"]},
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+        with open(os.path.join(root, ".config/systemd/user/t.service")) as f:
+            unit = f.read()
+        assert '--expect "\\"up\\" \\\\d$$"' in unit
+
+
 class TestOctalEscapes:
     def test_octal_escape_is_not_a_placeholder(self):
         """\\001 is printf's octal escape, not \\1: output must not change between runs."""

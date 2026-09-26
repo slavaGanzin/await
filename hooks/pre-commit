@@ -153,6 +153,18 @@ await 'curl -s https://unreliable-api.com || echo "failed"' --no-stderr
 await 'some-verbose-command' 'another-command' --no-stderr --stdout --silent
 \`\`\`
 
+### Wait for output, not exit codes
+\`\`\`bash
+# Succeed once stdout matches an extended regex, whatever the command exits with
+await 'curl -s localhost:8080/health' --expect '\"status\": *\"up\"'
+
+# Wait for a line in the log, then start the tests
+await 'tail -n 20 app.log' --expect 'Server started' --exec 'npm test'
+
+# Wait until the output stops matching
+await 'kubectl get pods' --expect 'Terminating' --fail
+\`\`\`
+
 ### Watch mode for clean monitoring
 \`\`\`bash
 # Equivalent to: await 'uptime' -fVodE  

@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **`--expect REGEX` (`-x`)**: a command succeeds when its stdout matches the POSIX extended regex (`^`/`$` match at each line; stderr is not matched), whatever it exits with, e.g. `await 'curl -s localhost:8080/health' --expect '"status": *"up"'`. Works with `--fail` (wait until it stops matching), `--any`, `--change` (only a change to matching output counts), `--exec`, `--retry` and `-t` (a timed-out run never matches); `--json` reports status 0 for a match and 1 otherwise. An invalid regex exits with status 2.
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
