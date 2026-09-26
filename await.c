@@ -19,9 +19,15 @@
 #include <stdatomic.h>
 #include <spawn.h>
 #include <poll.h>
+#include <sys/utsname.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
-#define AWAIT_VERSION "2.9.0"
-#define AWAIT_RELEASES_API "https://api.github.com/repos/slavaGanzin/await/releases/latest"
+#define AWAIT_VERSION "2.10.0"
+#define AWAIT_RELEASES "https://github.com/slavaGanzin/await/releases"
+
+int run_update(void);
 
 extern char **environ;
 
@@ -67,7 +73,7 @@ typedef struct {
   int forever;
   int daemonize;
   int fail;
-  int stdout;
+  int show_stdout;
   int diff;
   char *exec;
   char* service;
@@ -124,6 +130,7 @@ char* replace(const char* oldW, const char* newW, const char* s) {
 
 void print_autocomplete_fish() {
   printf("complete -c await -l version -s v -d 'Print the version of await'\n"
+         "complete -c await -l update -d 'Update await to the latest release'\n"
          "complete -c await -l help -d 'Print this help'\n"
          "complete -c await -l stdout -s o -d 'Print stdout of commands'\n"
          "complete -c await -l silent -s V -d 'Do not print spinners and commands'\n"
@@ -156,7 +163,7 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --update\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --exec)\n"
@@ -190,6 +197,7 @@ void print_autocomplete_zsh() {
          "  _arguments -s -S \\\n"
          "    '--help[Print this help]' \\\n"
          "    '--version[Display version]' \\\n"
+         "    '--update[Update await to the latest release]' \\\n"
          "    '--stdout[Print stdout of commands]' \\\n"
          "    '--no-stderr[Surpress stderr of commands by adding 2>/dev/null to commands]' \\\n"
          "    '--silent[Do not print spinners and commands]' \\\n"
@@ -741,6 +749,7 @@ void help() {
   "  --lap -l\t\t#show last run duration per command in spinner\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
+  "  --update\t\t#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)\n"
 
   "  --autocompletions\t#detect installed shells and auto-install completions for all of them\n"
   "  --autocomplete-fish\t#output fish shell autocomplete script\n"
@@ -754,7 +763,8 @@ void help() {
   "  await 'echo 10' 'date +%S' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
   "# set NO_COLOR=1 to disable colors\n"
   "# in an interactive terminal, await checks for a newer release in the background (at most daily)\n"
-  "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off\n"
+  "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off,\n"
+  "# or AWAIT_AUTO_UPDATE=1 to have that check run --update for you\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
@@ -849,6 +859,7 @@ void parse_args(int argc, char *argv[]) {
             {"name",  required_argument, 0, 'n'},
             {"json",  no_argument,       0, 'j'},
             {"lap",   no_argument,       0, 'l'},
+            {"update", no_argument, 0, 0},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
             {"autocomplete-bash", no_argument, 0, 0},
@@ -878,7 +889,9 @@ void parse_args(int argc, char *argv[]) {
 
         switch (getopt) {
           case 0:
-            if (strcmp(long_options[option_index].name, "autocompletions") == 0) {
+            if (strcmp(long_options[option_index].name, "update") == 0) {
+              exit(run_update());
+            } else if (strcmp(long_options[option_index].name, "autocompletions") == 0) {
               install_autocompletions();
               exit(0);
             } else if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
@@ -894,7 +907,7 @@ void parse_args(int argc, char *argv[]) {
             break;
 
           case 'V': args.silent = 1; break;
-          case 'o': args.stdout = 1; break;
+          case 'o': args.show_stdout = 1; break;
           case 'e': args.exec=optarg; break;
           case 's': args.expectedStatus=atoi(optarg); break;
           case 'f': args.fail = 1; break;
@@ -931,7 +944,7 @@ void parse_args(int argc, char *argv[]) {
           case 'w':
             args.fail = 1;
             args.silent = 1;
-            args.stdout = 1;
+            args.show_stdout = 1;
             args.diff = 1;
             args.no_stderr = 1;
             break;
@@ -1180,10 +1193,124 @@ int version_cmp(const char *a, const char *b) {
   return 0;
 }
 
+// Shell helpers shared by the update check and --update. The latest tag comes
+// from the redirect of <releases>/latest (-> .../releases/tag/X), not the GitHub
+// API, which rate-limits unauthenticated callers to 60 requests an hour per IP.
+#define UPDATE_SH_HELPERS \
+  "have() { command -v \"$1\" >/dev/null 2>&1; }\n" \
+  "fetch() { if have curl; then curl -fsSL --max-time 60 -o \"$2\" \"$1\"; " \
+  "elif have wget; then wget -q -T 60 -O \"$2\" \"$1\"; else return 2; fi; }\n" \
+  "latest_tag() { if have curl; then loc=$(curl -fsI --max-time 10 \"$1/latest\"); " \
+  "elif have wget; then loc=$(wget -q -S --max-redirect=0 -T 10 -O /dev/null \"$1/latest\" 2>&1); fi; " \
+  "loc=$(printf '%s\\n' \"$loc\" | tr -d '\\r' | sed -n 's/^ *[Ll]ocation: *//p' | tail -n1); " \
+  "tag=${loc##*/tag/}; [ -n \"$loc\" ] && [ \"$tag\" != \"$loc\" ] && printf '%s\\n' \"$tag\"; }\n"
+
+// where releases live; AWAIT_RELEASES_URL points it elsewhere (tests)
+static const char *releases_url(void) {
+  const char *url = getenv("AWAIT_RELEASES_URL");
+  return url && *url ? url : AWAIT_RELEASES;
+}
+
+// the release archive built for this machine ("" when there is none);
+// AWAIT_UPDATE_TARGET overrides it (tests)
+static const char *release_target(void) {
+  const char *forced = getenv("AWAIT_UPDATE_TARGET");
+  if (forced) return forced;
+  struct utsname u;
+  if (uname(&u) != 0) return "";
+  int arm = !strcmp(u.machine, "arm64") || !strcmp(u.machine, "aarch64");
+  int x86 = !strcmp(u.machine, "x86_64") || !strcmp(u.machine, "amd64");
+  if (!strcmp(u.sysname, "Darwin")) return arm ? "aarch64-apple-darwin" : x86 ? "x86_64-apple-darwin" : "";
+  // Linux gets the static (musl) build: it runs regardless of the distro's libc
+  if (!strcmp(u.sysname, "Linux")) return arm ? "aarch64-unknown-linux-musl" : x86 ? "x86_64-unknown-linux-musl" : "";
+  return "";
+}
+
+// absolute, symlink-free path of this binary
+static int self_path(char *out, size_t size) {
+#ifdef __APPLE__
+  char raw[PATH_MAX];
+  uint32_t raw_size = sizeof(raw);
+  if (_NSGetExecutablePath(raw, &raw_size) != 0) return -1;
+  return realpath(raw, out) ? 0 : -1;
+#else
+  ssize_t len = readlink("/proc/self/exe", out, size - 1);
+  if (len < 0) return -1;
+  out[len] = '\0';
+  return 0;
+#endif
+}
+
+// await --update: replace this binary with the latest release, or explain why
+// not. Order matters so the worst case is "not updated", never a broken await:
+// refuse package-managed installs, check permissions, download and verify the
+// checksum, test-run the new binary, keep a backup, then rename atomically
+// (a running await keeps its old file; nothing is overwritten in place, which
+// would also invalidate the code signature on macOS).
+int run_update(void) {
+  char self[PATH_MAX];
+  if (self_path(self, sizeof(self)) != 0) {
+    fprintf(stderr, "await: can't find where this binary is installed\n");
+    return 1;
+  }
+  const char *script = UPDATE_SH_HELPERS
+    "self=$1 cur=$2 base=$3 target=$4\n"
+    "say() { printf 'await: %s\\n' \"$*\" >&2; }\n"
+    "case \"$self\" in\n"
+    "  /nix/store/*) say \"installed by Nix ($self): update it through Nix\"; exit 3;;\n"
+    "  */Cellar/*|/home/linuxbrew/*) say \"installed by Homebrew: run brew upgrade await\"; exit 3;;\n"
+    "esac\n"
+    "if have pacman && pacman -Qo \"$self\" >/dev/null 2>&1; then say \"installed by pacman/AUR: update it with your AUR helper (e.g. yay -S await)\"; exit 3; fi\n"
+    "if have dpkg && dpkg -S \"$self\" >/dev/null 2>&1; then say \"installed by a system package: update it with your package manager\"; exit 3; fi\n"
+    "[ -n \"$target\" ] || { say \"no prebuilt await for $(uname -sm); build it from source\"; exit 4; }\n"
+    "have curl || have wget || { say 'need curl or wget to update'; exit 5; }\n"
+    "tag=$(latest_tag \"$base\") || { say \"couldn't find the latest release at $base/latest\"; exit 5; }\n"
+    "new=${tag#v}\n"
+    "newer() { awk -v a=\"$1\" -v b=\"$2\" 'BEGIN { n = split(a, x, \".\"); m = split(b, y, \".\"); if (m > n) n = m;"
+    " for (i = 1; i <= n; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 } exit 1 }'; }\n"
+    "newer \"$new\" \"$cur\" || { say \"already up to date ($cur)\"; exit 0; }\n"
+    "dir=$(dirname \"$self\")\n"
+    "[ -w \"$dir\" ] || { say \"no permission to replace $self; run: sudo $self --update\"; exit 6; }\n"
+    "tmp=$(mktemp -d \"$dir/.await-update.XXXXXX\") || { say \"can't create a temporary directory in $dir\"; exit 6; }\n"
+    "trap 'rm -rf \"$tmp\"' EXIT\n"
+    "archive=await-$tag-$target.tar.gz\n"
+    "say \"downloading await $new ($target)\"\n"
+    "fetch \"$base/download/$tag/$archive\" \"$tmp/$archive\" || { say \"release $tag has no $target build ($archive)\"; exit 7; }\n"
+    "fetch \"$base/download/$tag/SHA256SUMS\" \"$tmp/SHA256SUMS\" || { say \"release $tag publishes no SHA256SUMS; not installing an unverified binary\"; exit 8; }\n"
+    "want=$(awk -v f=\"$archive\" '$2 == f || $2 == \"*\" f { print $1 }' \"$tmp/SHA256SUMS\")\n"
+    "if have sha256sum; then got=$(sha256sum \"$tmp/$archive\"); elif have shasum; then got=$(shasum -a 256 \"$tmp/$archive\");"
+    " else say 'need sha256sum or shasum to verify the download'; exit 8; fi\n"
+    "got=${got%% *}\n"
+    "[ -n \"$want\" ] && [ \"$want\" = \"$got\" ] || { say \"checksum mismatch for $archive; not installing\"; exit 8; }\n"
+    "mkdir \"$tmp/x\" && tar -xzf \"$tmp/$archive\" -C \"$tmp/x\" && [ -f \"$tmp/x/await\" ] || { say \"couldn't unpack $archive\"; exit 9; }\n"
+    "chmod +x \"$tmp/x/await\"\n"
+    "ran=$(\"$tmp/x/await\" --version 2>/dev/null)\n"
+    "[ \"$ran\" = \"$new\" ] || { say \"the downloaded await doesn't run here (--version gave '${ran:-nothing}'); staying on $cur\"; exit 10; }\n"
+    "cp -p \"$self\" \"$self.old\" 2>/dev/null || say \"couldn't keep a backup at $self.old\"\n"
+    "mv -f \"$tmp/x/await\" \"$self\" || { say \"couldn't replace $self\"; exit 11; }\n"
+    "say \"updated $cur -> $new ($self; the previous version is kept at $self.old)\"\n";
+  fflush(stdout);
+  fflush(stderr);
+  pid_t pid = fork();
+  if (pid == 0) {
+    execl("/bin/sh", "sh", "-c", script, "await-update", self, AWAIT_VERSION, releases_url(), release_target(), NULL);
+    _exit(127);
+  }
+  if (pid < 0) {
+    perror("await: --update");
+    return 1;
+  }
+  int status;
+  while (waitpid(pid, &status, 0) < 0)
+    if (errno != EINTR) return 1;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+}
+
 // Update notifier: when a newer release is cached, say so; when the cache is
 // older than a day (or missing), refresh it in a detached background process,
 // so await itself never waits on the network. Only in interactive sessions,
-// and never when AWAIT_NO_UPDATE_CHECK is set. Must run before any threads.
+// and never when AWAIT_NO_UPDATE_CHECK is set. With AWAIT_AUTO_UPDATE=1 the
+// background check also runs --update. Must run before any threads.
 void update_check() {
   const char *off = getenv("AWAIT_NO_UPDATE_CHECK");
   if ((off && *off) || !isatty(STDERR_FILENO)) return;
@@ -1209,22 +1336,25 @@ void update_check() {
   }
   if (*latest && version_cmp(latest, AWAIT_VERSION) > 0 && !args.silent)
     fprintf(stderr, use_color()
-      ? "\033[33mawait %s is available (you have %s): https://github.com/slavaGanzin/await/releases/latest\033[0m\n"
-      : "await %s is available (you have %s): https://github.com/slavaGanzin/await/releases/latest\n",
+      ? "\033[33mawait %s is available (you have %s): run await --update\033[0m\n"
+      : "await %s is available (you have %s): run await --update\n",
       latest, AWAIT_VERSION);
 
   struct stat st;
   if (stat(cache, &st) == 0 && time(NULL) - st.st_mtime < 24 * 60 * 60) return;
 
-  const char *url = getenv("AWAIT_UPDATE_URL");  // for tests
-  if (!url || !*url) url = AWAIT_RELEASES_API;
+  // AWAIT_AUTO_UPDATE=1: the background check also updates this binary
+  const char *autoupdate = getenv("AWAIT_AUTO_UPDATE");
+  char self[PATH_MAX] = "";
+  if (autoupdate && *autoupdate && strcmp(autoupdate, "0") != 0 && self_path(self, sizeof(self)) != 0)
+    self[0] = '\0';
+
   // touch first, so a failed or offline check also waits a day before retrying
-  const char *script =
-    "mkdir -p \"$1\" && touch \"$2\" || exit; "
-    "if command -v curl >/dev/null; then body=$(curl -fsSL --max-time 10 \"$3\"); "
-    "else body=$(wget -qO- -T 10 \"$3\"); fi; "
-    "tag=$(printf '%s\\n' \"$body\" | sed -n 's/.*\"tag_name\": *\"\\([^\"]*\\)\".*/\\1/p' | head -n1); "
-    "[ -n \"$tag\" ] && printf '%s\\n' \"$tag\" > \"$2.$$\" && mv \"$2.$$\" \"$2\"";
+  const char *script = UPDATE_SH_HELPERS
+    "mkdir -p \"$1\" && touch \"$2\" || exit\n"
+    "tag=$(latest_tag \"$3\") || exit\n"
+    "printf '%s\\n' \"$tag\" > \"$2.$$\" && mv \"$2.$$\" \"$2\"\n"
+    "[ -z \"$4\" ] || \"$4\" --update >> \"$1/update.log\" 2>&1\n";
 
   fflush(stdout);
   fflush(stderr);
@@ -1243,7 +1373,7 @@ void update_check() {
     long max_fd = sysconf(_SC_OPEN_MAX);
     if (max_fd < 0 || max_fd > 65536) max_fd = 65536;
     for (int fd = STDERR_FILENO + 1; fd < max_fd; fd++) close(fd);
-    execl("/bin/sh", "sh", "-c", script, "await-update-check", dir, cache, url, NULL);
+    execl("/bin/sh", "sh", "-c", script, "await-update-check", dir, cache, releases_url(), self, NULL);
     _exit(127);
   }
   if (pid > 0) waitpid(pid, NULL, 0);
@@ -1355,7 +1485,7 @@ int main(int argc, char *argv[]) {
           sappendf(&display, &display_len, "\033[0;3%dm%s\033[0m %s\n", color, spinner[atomic_load(&c[i].spinner)], c[i].name ? c[i].name : c[i].command);
         
         // Add output if available, or previous output if command has run before
-        if (args.stdout) {
+        if (args.show_stdout) {
           char *output_to_show = output_snapshot(&c[i]);
           
           if (output_to_show) {
@@ -1380,7 +1510,7 @@ int main(int argc, char *argv[]) {
       last_display = display;
     } else {
       // Silent mode - handle stdout only, similar to non-silent mode with clearing
-      if (args.stdout) {
+      if (args.show_stdout) {
         // Clear previous silent output (but not on first run)
         if (last_silent_output && !first_output) {
           int lines = 0;
