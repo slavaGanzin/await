@@ -55,8 +55,8 @@ typedef struct {
   _Atomic int changes;   // runs whose stdout differed from the previous run
   int seenChanges;       // changes already acted on by the main loop
   _Atomic int streak;    // consecutive successful checks (--times)
-  _Atomic int reached;   // times the streak reached --times
-  int seenReached;       // reached already acted on by the main loop
+  _Atomic int reached;   // completed --times streaks (--change: every Nth change in a row)
+  int seenReached;       // completed streaks already acted on by the main loop
   // guards out/outPos/outCap/previousOut/diffOut: the command's thread
   // writes them while the main loop and other commands read them
   pthread_mutex_t lock;
@@ -540,8 +540,11 @@ int check_ok(int status, int changed) {
 
 int not_done_cmd(int i) {
   if (args.times) {
+    // a completed streak not acted on yet counts even if a later check has
+    // broken the streak before the main loop got to see it
+    if (c[i].reached != c[i].seenReached) return 0;
     // --change: every Nth change in a row is an event to act on once
-    if (args.change) return c[i].reached == c[i].seenReached;
+    if (args.change) return 1;
     return c[i].streak < args.times;
   }
   if (args.change) return c[i].changes == c[i].seenChanges;
@@ -787,6 +790,7 @@ void help() {
   "# you can use stdout substitution in --exec and in commands itself:\n"
   "  await 'echo 10' 'date +%S' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
   "# with --times and --forever, --exec runs once each time a streak reaches N, not on every check after\n"
+  "# (--change --times N: at every Nth change in a row)\n"
   "# set NO_COLOR=1 to disable colors\n"
   "# in an interactive terminal, await checks for a newer release in the background (at most daily)\n"
   "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off,\n"
@@ -1206,7 +1210,9 @@ void *shell(void * arg) {
     if (args.times) {
       // an unsuccessful check starts the streak over
       c->streak = !check_ok(run_status, changed) ? 0 : c->streak < INT_MAX ? c->streak + 1 : c->streak;
-      if (c->streak == args.times) c->reached++;
+      // a streak completes at N successes in a row (--change: at every Nth change in a row)
+      if (c->streak > 0 && (args.change ? c->streak % args.times == 0 : c->streak == args.times))
+        c->reached++;
     }
     pthread_mutex_unlock(&c->lock);
 
@@ -1684,10 +1690,11 @@ int main(int argc, char *argv[]) {
 
     // with --forever, a trigger during a running --exec waits for it to finish
     if ((not_done == 0 || args.any && not_done < args.nCommands) && new_streak && !exec_pid) {
-      // act on each change (and each --times streak) only once
+      // act on each change only once, and on each completed --times streak
+      // once: streaks completed while an --exec ran each get their own run
       for (int i = 1; i <= args.nCommands; i++) {
         c[i].seenChanges = c[i].changes;
-        c[i].seenReached = c[i].reached;
+        if (c[i].seenReached != c[i].reached) c[i].seenReached++;
       }
 
       int exec_status = 0;
@@ -1726,8 +1733,8 @@ int main(int argc, char *argv[]) {
             } else {
               fprintf(stderr, "  '%s': last exit %d\n", c[i].command, c[i].status);
             }
-            if (args.times && !args.change && c[i].status != -1)
-              fprintf(stderr, "    %d of %d checks in a row\n", c[i].streak, args.times);
+            if (args.times && c[i].status != -1)
+              fprintf(stderr, "    %d of %d %s in a row\n", c[i].streak, args.times, args.change ? "changes" : "checks");
           }
         }
         if (args.json) print_json_result(1);

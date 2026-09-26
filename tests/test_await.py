@@ -2082,7 +2082,7 @@ class TestTimes:
         assert returncode == 0
         runs = pattern.runs()
         assert runs[:6] == ["fail", "ok", "fail", "ok", "ok", "ok"]
-        assert len(runs) <= 7  # it stops right after the streak completes
+        assert len(runs) <= 8  # it stops right after the streak completes (+1 for scheduling)
         assert elapsed >= 1.0, f"exited after {elapsed:.2f}s, before 6 runs 0.2s apart"
 
     def test_failure_resets_streak(self, pattern):
@@ -2158,6 +2158,56 @@ class TestTimes:
         assert len(pattern.runs()) > 10
         with open(fired) as f:
             assert len(f.readlines()) == 2
+
+    def test_change_counts_every_nth_change_in_a_row(self, pattern):
+        """--change --times 2: output changing on every check completes a streak
+        at the 2nd, 4th, 6th ... change, not just the 2nd."""
+        counter = os.path.join(pattern.root, "counter")
+        fired = os.path.join(pattern.root, "fired")
+        cmd = f"n=\\$(cat {counter} 2>/dev/null || echo 0); echo \\$((n+1)) > {counter}; echo \\$n"
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 1.5 -i 0.05 --change --times 2 --forever "{cmd}" --exec "echo x >> {fired}"',
+            timeout=5.0
+        )
+        assert returncode == 1  # -T ends --forever
+        with open(counter) as f:
+            changes = int(f.read()) - 1  # the first run is the baseline
+        with open(fired) as f:
+            fires = len(f.readlines())
+        assert changes >= 10, changes
+        # one --exec per 2 changes (the last one may still be pending at exit)
+        assert changes // 2 - 1 <= fires <= changes // 2, (changes, fires)
+
+    def test_completed_streak_is_not_lost_when_it_breaks(self, pattern):
+        """A command that reached N counts as done even if a later check broke
+        its streak before the others were done."""
+        early = pattern("ok,ok,fail")  # completes its streak at run 2, then fails for good
+        late = os.path.join(pattern.root, "late")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --times 2 "{early}" "[ -e {late} ] || {{ sleep 0.5; touch {late}; false; }}"',
+            timeout=5.0
+        )
+        assert returncode == 0
+        assert pattern.runs()[:3] == ["ok", "ok", "fail"]
+
+    def test_forever_exec_runs_for_each_streak_completed_during_it(self, pattern):
+        """Streaks that complete while a slow --exec runs are not merged into one."""
+        cmd = pattern("ok,fail,ok,fail,ok,fail")  # 3 streaks within ~0.3s, then failures
+        fired = os.path.join(pattern.root, "fired")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 3 -i 0.05 --forever --times 1 "{cmd}" --exec "sleep 0.6; echo x >> {fired}"',
+            timeout=6.0
+        )
+        assert returncode == 1
+        with open(fired) as f:
+            assert len(f.readlines()) == 3
+
+    def test_timeout_report_shows_change_streak(self):
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-T 0.5 -i 0.05 --change --times 3 "echo same"', timeout=5.0
+        )
+        assert returncode == 1
+        assert "0 of 3 changes in a row" in strip_ansi_escape_codes(stderr)
 
 
 class TestExitCleanup:
