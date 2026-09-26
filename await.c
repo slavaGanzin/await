@@ -24,7 +24,7 @@
 #include <mach-o/dyld.h>
 #endif
 
-#define AWAIT_VERSION "2.10.0"
+#define AWAIT_VERSION "2.11.0"
 #define AWAIT_RELEASES "https://github.com/slavaGanzin/await/releases"
 
 int run_update(void);

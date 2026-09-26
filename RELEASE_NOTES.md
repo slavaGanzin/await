@@ -1,5 +1,15 @@
 # Release Notes
 
+## 2.11.0
+
+### New Features
+
+### Changes
+
+- CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
+
+---
+
 ## 2.10.0
 
 ### New Features
