@@ -2068,13 +2068,18 @@ class TestBackoff:
             return "perl -MTime::HiRes=time -e 'printf \"%s %.6f\\n\", $ARGV[0], time'"
         return "python3 -c 'import sys, time; print(sys.argv[1], \"%.6f\" % time.time())'"
 
+    @staticmethod
+    def fmt(pauses):
+        """pauses in full for assertion messages (pytest abbreviates long lists)"""
+        return " ".join(f"{p:.3f}" for p in pauses)
+
     @pytest.fixture
     def check(self):
         """check(ok_when) -> a command for await that stamps its start and end
         in a log and succeeds when the shell test ok_when holds ($n: number of
-        earlier runs); check.pauses() -> seconds between each run's end and the
-        next run's start (with timed_out, leaving out the last one: when -T
-        ends the wait, it is cut short at the deadline)."""
+        earlier runs); check.pauses(before) -> seconds between each run's end
+        and the next run's start, for the runs that started before `before`
+        (with -T, the pause ending at the deadline is cut short on purpose)."""
         root = tempfile.mkdtemp(dir=TMPDIR)
         log = os.path.join(root, "log")
         script = os.path.join(root, "check.sh")
@@ -2089,52 +2094,60 @@ class TestBackoff:
                         f'exit $rc\n')
             return f"sh {script}"
 
-        def pauses(timed_out=True):
+        def pauses(before=None):
             starts, ends = [], []
             with open(log) as f:
                 for line in f:
                     tag, t = line.split()
                     (starts if tag == "s" else ends).append(float(t))
-            found = [s - e for e, s in zip(ends, starts[1:])]
-            return found[:-1] if timed_out else found
+            return [s - e for e, s in zip(ends, starts[1:]) if before is None or s < before]
 
         make.pauses = pauses
         yield make
         import shutil
         shutil.rmtree(root, ignore_errors=True)
 
+    # These runs end by the command succeeding, not by -T, so no pause is cut
+    # short at a deadline.
+
     def test_intervals_double_up_to_the_cap(self, check):
+        # runs 1-6 fail, run 7 succeeds
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V -T 3.4 --interval 0.1 --backoff 0.8 "{check()}"', timeout=6.0)
-        assert returncode == 1
+            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 6 ]")}"', timeout=8.0)
+        assert returncode == 0
         pauses = check.pauses()
-        # 0.1 0.2 0.4 0.8 0.8 ... each +-10%
-        assert len(pauses) >= 5, pauses
+        # 0.1 0.2 0.4 0.8 0.8 0.8, each +-10%
+        assert len(pauses) == 6, self.fmt(pauses)
         for pause, expected in zip(pauses, [0.1, 0.2, 0.4, 0.8, 0.8, 0.8]):
-            assert expected * 0.85 <= pause <= expected * 1.1 + self.OVERHEAD, (pauses, expected)
+            assert expected * 0.85 <= pause <= expected * 1.1 + self.OVERHEAD, \
+                f"{self.fmt(pauses)} (expected {expected})"
         # grows run after run until the cap
-        assert pauses[0] < pauses[1] < pauses[2] < pauses[3], pauses
+        assert pauses[0] < pauses[1] < pauses[2] < pauses[3], self.fmt(pauses)
 
     def test_cap_is_respected(self, check):
+        # runs 1-7 fail, run 8 succeeds; uncapped, the 4th pause would be 0.8s
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V -T 2.4 --interval 0.1 --backoff 0.3 "{check()}"', timeout=6.0)
+            f'-V --interval 0.1 --backoff 0.3 "{check("[ $n -ge 7 ]")}"', timeout=8.0)
+        assert returncode == 0
         pauses = check.pauses()
-        # uncapped, the 4th pause alone would be 0.8s and the 5th 1.6s
-        assert len(pauses) >= 6, pauses
-        assert max(pauses) <= 0.3 + self.OVERHEAD, pauses
-        assert all(p >= 0.3 * 0.85 for p in pauses[2:]), pauses
+        assert len(pauses) == 7, self.fmt(pauses)
+        assert max(pauses) <= 0.3 + self.OVERHEAD, self.fmt(pauses)
+        assert all(p >= 0.3 * 0.85 for p in pauses[2:]), self.fmt(pauses)
 
     def test_success_resets_the_interval(self, check):
-        # runs 1-4 fail (pauses 0.1 0.2 0.4 0.8), run 5 succeeds, then failures again
+        # runs 1-4 fail (pauses 0.1 0.2 0.4 0.8), run 5 succeeds, then failures
+        # again; --forever needs -T to end, so leave out the pauses near it
+        start = time.time()
         returncode, stdout, stderr = run_await_with_timeout(
             f'-V -T 2.8 --forever --interval 0.1 --backoff 0.8 "{check("[ $n -eq 4 ]")}"',
             timeout=6.0)
-        pauses = check.pauses()
-        assert len(pauses) >= 6, pauses
-        assert pauses[3] >= 0.8 * 0.85, pauses                 # after the 4th failure: 0.8
-        assert pauses[4] <= 0.1 + self.OVERHEAD, pauses        # after the success: --interval
-        assert pauses[4] < pauses[3] / 2, pauses
-        assert pauses[5] <= 0.1 * 1.1 + self.OVERHEAD, pauses  # then growing again from there
+        assert returncode == 1
+        pauses = check.pauses(before=start + 2.8)
+        assert len(pauses) >= 6, self.fmt(pauses)
+        assert pauses[3] >= 0.8 * 0.85, self.fmt(pauses)                 # after the 4th failure: 0.8
+        assert pauses[4] <= 0.1 + self.OVERHEAD, self.fmt(pauses)        # after the success: --interval
+        assert pauses[4] < pauses[3] / 2, self.fmt(pauses)
+        assert pauses[5] <= 0.1 * 1.1 + self.OVERHEAD, self.fmt(pauses)  # then growing again from there
 
     def test_timeout_is_not_overshot(self):
         start = time.time()
@@ -2145,6 +2158,18 @@ class TestBackoff:
         assert returncode == 1
         assert elapsed < 2.0, f"took {elapsed:.2f}s"
 
+    def test_no_back_to_back_reruns_at_the_deadline(self, check):
+        """The pause that would pass -T is cut to end at the deadline, but once
+        it has passed pauses are not cut to nothing: the command must not be
+        rerun back to back while await is giving up."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 1.05 --interval 0.1 --backoff 30 "{check()}"', timeout=5.0)
+        assert returncode == 1
+        # await notices -T at its next 0.1s tick, up to ~0.05s after the deadline
+        pauses = check.pauses()
+        # 0.1 0.2 0.4, then 0.8 would pass the deadline (~0.7s in) and is cut
+        assert len(pauses) <= 4, self.fmt(pauses)
+
     def test_success_during_backoff_is_noticed_at_next_check(self, check):
         """A command that starts succeeding is picked up at its next check."""
         start = time.time()
@@ -2152,10 +2177,10 @@ class TestBackoff:
             f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 3 ]")}"', timeout=5.0)
         elapsed = time.time() - start
         assert returncode == 0
-        pauses = check.pauses(timed_out=False)
+        pauses = check.pauses()
         # pauses 0.1 0.2 0.4, then the 4th run succeeds
-        assert len(pauses) == 3, pauses
-        assert pauses[2] >= 0.4 * 0.85, pauses
+        assert len(pauses) == 3, self.fmt(pauses)
+        assert pauses[2] >= 0.4 * 0.85, self.fmt(pauses)
         assert elapsed < 2.5
 
     @pytest.mark.parametrize("value", ["abc", "0", "-1", "", "1s"])
@@ -2171,12 +2196,14 @@ class TestBackoff:
         assert "--interval" in stderr
 
     def test_unchanged_without_flag(self, check):
+        # runs 1-7 fail, run 8 succeeds
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V -T 1.2 --interval 0.1 "{check()}"', timeout=5.0)
+            f'-V --interval 0.1 "{check("[ $n -ge 7 ]")}"', timeout=5.0)
+        assert returncode == 0
         pauses = check.pauses()
-        # with backoff the 3rd and 4th pauses alone would be 0.4s and 0.8s
-        assert len(pauses) >= 5, pauses
-        assert max(pauses) <= 0.1 + self.OVERHEAD, pauses
+        # with backoff the 3rd and 4th pauses would be 0.4s and 0.8s
+        assert len(pauses) == 7, self.fmt(pauses)
+        assert all(0.1 * 0.85 <= p <= 0.1 + self.OVERHEAD for p in pauses), self.fmt(pauses)
 
 
 class TestPublishOrder:

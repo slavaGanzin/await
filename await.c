@@ -1073,7 +1073,9 @@ static unsigned xorshift32(unsigned *state) {
 // next failed check gets: --interval after a success, doubling with each
 // failure in a row, up to MAX. Failed checks' pauses get +-10% jitter, so
 // commands backing off together don't stay in lockstep, and never pass MAX
-// nor the --timeout deadline (no point sleeping past the end).
+// nor the --timeout deadline (no point sleeping past the end). Once the
+// deadline has passed (await is about to give up), pauses are left alone
+// rather than cut to nothing, so the command isn't rerun back to back.
 long backoff_pause(long *wait, int ok, unsigned *rng) {
   if (ok) {
     *wait = args.interval;
@@ -1085,7 +1087,7 @@ long backoff_pause(long *wait, int ok, unsigned *rng) {
   if (pause > args.backoff) pause = args.backoff;
   if (args.timeout > 0) {
     long left = args.start_time + args.timeout - current_time_ms();
-    if (pause > left) pause = left > 0 ? left : 0;
+    if (left > 0 && pause > left) pause = left;
   }
   return pause;
 }
