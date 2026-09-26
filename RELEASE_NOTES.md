@@ -4,7 +4,7 @@
 
 ### New Features
 
-- **`--times N`**: a command counts as done only after N successful checks in a row, and any unsuccessful check starts the count over, so a flapping service doesn't end the wait (`await 'curl -sf localhost:8080/health' --times 3 --interval 1`). With `--fail` it counts failures in a row; with `--forever`, `--exec` runs once each time a streak reaches N rather than on every check after; `--json` reports each command's `streak`.
+- **`--times N`**: a command counts as done only after N successful checks in a row, and any unsuccessful check starts the count over, so a flapping service doesn't end the wait (`await 'curl -sf localhost:8080/health' --times 3 --interval 1`). With `--fail` it counts failures in a row; with `--forever`, `--exec` runs once each time a streak reaches N rather than on every check after; `--json` reports each command's `streak` (for a command that completed its streak, the streak that ended the wait).
 
 ### Changes
 

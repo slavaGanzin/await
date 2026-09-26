@@ -2114,6 +2114,23 @@ class TestTimes:
         command = json.loads(stdout.strip())["commands"][0]
         assert command["streak"] == 2 and command["times"] == 2
 
+    def test_json_reports_the_streak_that_ended_the_wait(self, pattern):
+        """A completed streak is reported as it was when it completed, even
+        after a later check broke it (or, with a slow --exec, extended it)."""
+        import json
+        early = pattern("ok,ok,fail")  # completes its streak at run 2, then fails for good
+        late = os.path.join(pattern.root, "late")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'--json -i 0.05 --times 2 "{early}" '
+            f'"[ -e {late} ] || {{ sleep 0.5; touch {late}; false; }}" --exec "sleep 0.3"',
+            timeout=5.0
+        )
+        assert returncode == 0
+        early_json, late_json = json.loads(stdout.strip())["commands"]
+        assert early_json["streak"] == 2  # its live streak is 0 by now
+        assert late_json["streak"] == 2   # its live streak grew during --exec
+        assert pattern.runs()[2] == "fail"
+
     def test_json_unchanged_without_times(self):
         import json
         returncode, stdout, stderr = run_await_with_timeout('--json "true"')

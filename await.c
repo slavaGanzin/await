@@ -57,6 +57,7 @@ typedef struct {
   _Atomic int streak;    // consecutive successful checks (--times)
   _Atomic int reached;   // completed --times streaks (--change: every Nth change in a row)
   int seenReached;       // completed streaks already acted on by the main loop
+  _Atomic int reachedStreak;  // the streak when the last one completed (--json)
   // guards out/outPos/outCap/previousOut/diffOut: the command's thread
   // writes them while the main loop and other commands read them
   pthread_mutex_t lock;
@@ -587,7 +588,12 @@ void print_json_result(int exit_code) {
     printf(",\"command\":");
     print_json_string(c[i].command);
     printf(",\"status\":%d,", c[i].status);
-    if (args.times) printf("\"streak\":%d,\"times\":%d,", c[i].streak, args.times);
+    if (args.times) {
+      // a command whose completed streak ended the wait reports that streak,
+      // not whatever its checks since (the thread keeps running) made of it
+      int streak = !args.forever && c[i].reached > 0 ? c[i].reachedStreak : c[i].streak;
+      printf("\"streak\":%d,\"times\":%d,", streak, args.times);
+    }
     printf("\"output\":");
     pthread_mutex_lock(&c[i].lock);
     print_json_string(c[i].previousOut);
@@ -1211,8 +1217,10 @@ void *shell(void * arg) {
       // an unsuccessful check starts the streak over
       c->streak = !check_ok(run_status, changed) ? 0 : c->streak < INT_MAX ? c->streak + 1 : c->streak;
       // a streak completes at N successes in a row (--change: at every Nth change in a row)
-      if (c->streak > 0 && (args.change ? c->streak % args.times == 0 : c->streak == args.times))
+      if (c->streak > 0 && (args.change ? c->streak % args.times == 0 : c->streak == args.times)) {
+        c->reachedStreak = c->streak;
         c->reached++;
+      }
     }
     pthread_mutex_unlock(&c->lock);
 
