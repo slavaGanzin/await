@@ -10,6 +10,8 @@
 
 - **Released binaries are executable.** Every release archive so far shipped `await` without the execute bit (the CI artifact step drops permissions), so a plain download needed `chmod +x`.
 - **No more races between the display and running commands.** Output shown on screen, in `--json` and in `\1` substitutions could occasionally be empty or garbled (#30).
+- **Octal escapes aren't placeholders.** `\001` in a command (e.g. `printf 'a\001b'`) was read as `\1`, so from the second run on it was replaced with command output.
+- **No orphaned commands.** Commands still running when await exits (e.g. the others after `--any` succeeds) are now stopped, and `--retry N` never starts an extra attempt.
 
 ---
 
