@@ -2107,6 +2107,32 @@ class TestExpect:
         assert r.returncode == 0, r.stderr
         assert "got ready" in r.stdout
 
+    def test_timed_out_run_never_completes_fail(self):
+        # the run is killed before printing, so it neither matched nor didn't
+        r = self.run("sleep 5; echo X", "-x", "X", "--fail", "-t", "1", "-T", "2.5", "-V")
+        assert r.returncode == 1
+
+    def test_timed_out_run_never_completes_match(self):
+        r = self.run("echo X; sleep 5", "-x", "Y", "--fail", "-t", "1", "-T", "2.5", "-V")
+        assert r.returncode == 1
+        r = self.run("echo X; sleep 5", "-x", "X", "-t", "1", "-T", "2.5", "-V")
+        assert r.returncode == 1
+
+    def test_nul_in_output_does_not_hide_match(self):
+        r = self.run("printf 'a\\0ready'", "-x", "ready", "-T", "2", "-V")
+        assert r.returncode == 0, r.stderr
+        r = self.run("printf 'a\\0b'", "-x", "ready", "-i", "0.05", "-T", "0.5", "-V")
+        assert r.returncode == 1
+
+    def test_no_command_not_found_hint_when_output_matched(self):
+        r = self.run("echo ready; exit 127", "-x", "ready", "-T", "2")
+        assert r.returncode == 0
+        assert "command not found" not in r.stderr
+        r = self.run("echo nope; exit 127", "-x", "ready", "-i", "0.05", "-T", "0.5")
+        assert r.returncode == 1
+        assert "command not found" in r.stderr
+
+    @pytest.mark.skipif(platform.system() != "Linux", reason="--service is Linux-only")
     def test_service_replays_quoted_regex(self):
         root = tempfile.mkdtemp()
         bindir = os.path.join(root, "stub")

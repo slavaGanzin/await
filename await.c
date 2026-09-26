@@ -530,6 +530,8 @@ int wait_exec(pid_t pid) {
 
 int not_done_cmd(int i) {
   if (args.change) return c[i].changes == c[i].seenChanges;
+  // --expect: a timed-out run (124) neither matched nor failed to match
+  if (args.expect && c[i].status == 124) return 1;
   return c[i].status==-1 || (args.fail && c[i].status == 0) || (!args.fail && c[i].status != args.expectedStatus);
 }
 
@@ -1056,6 +1058,17 @@ int service() {
   return 0;
 }
 
+// does out (len bytes, possibly with NULs) match --expect? regexec reads C
+// strings, so match each NUL-separated segment (REG_STARTEND isn't portable)
+int expect_matches(const char *out, size_t len) {
+  const char *p = out, *end = out + len;
+  do {
+    if (regexec(&args.expect_re, p, 0, NULL, 0) == 0) return 1;
+    p += strlen(p) + 1;
+  } while (p < end);
+  return 0;
+}
+
 void *shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   pthread_mutex_lock(&c->lock);
@@ -1166,8 +1179,9 @@ void *shell(void * arg) {
     // it exited with, and has status 1 when it doesn't; a timed-out run keeps 124
     int expect_status = -1;
     if (args.expect && !timed_out)
-      expect_status = regexec(&args.expect_re, c->out, 0, NULL, 0) == 0 ? 0 : 1;
-    if (run_status == 127 && !c->warned127) {
+      expect_status = expect_matches(c->out, c->outPos) ? 0 : 1;
+    // matching output means the command ran: no "command not found" hint
+    if (run_status == 127 && expect_status != 0 && !c->warned127) {
       c->warned127 = 1;
       fprintf(stderr, "\nawait: '%s' exited with 127 (command not found).\n"
                        "       Check for a typo, or that it's installed and on PATH.\n",
