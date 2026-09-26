@@ -1480,13 +1480,13 @@ class TestCmdTimeoutAndRetry:
                 os.remove(counter)
 
 
-def run_with_tty_stderr(args, env, timeout=5.0):
+def run_with_tty_stderr(args, env, timeout=5.0, binary="../await"):
     """Run await with stderr on a pseudo-terminal, like an interactive shell.
     Returns (returncode, stderr, seconds)."""
     import pty, select
     master, slave = pty.openpty()
     start = time.time()
-    proc = subprocess.Popen(["../await"] + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    proc = subprocess.Popen([binary] + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=slave, env={**os.environ, **env})
     os.close(slave)
     err = b""
@@ -1507,20 +1507,91 @@ def run_with_tty_stderr(args, env, timeout=5.0):
     return proc.returncode, err.decode(errors="replace"), time.time() - start
 
 
+class FakeReleases:
+    """A local stand-in for github.com/<repo>/releases: /latest redirects to
+    /tag/<latest>, /download/<tag>/<file> serves published files. Clearing
+    `answer` makes /latest hang, like a slow network."""
+
+    def __init__(self):
+        import http.server, threading
+        self.latest = None
+        self.files = {}
+        self.requests = []
+        self.answer = threading.Event()
+        self.answer.set()
+        releases = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_HEAD(self):
+                self.do_GET(body=False)
+
+            def do_GET(self, body=True):
+                releases.requests.append(self.path)
+                if self.path == "/releases/latest":
+                    releases.answer.wait(30)
+                    if releases.latest:
+                        self.send_response(302)
+                        self.send_header("Location", f"{releases.url}/tag/{releases.latest}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                data = releases.files.get(self.path)
+                if data is None:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                if body:
+                    self.wfile.write(data)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/releases"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True):
+        """Publish `version` with an archive for `target` whose `await` is a stand-in
+        that answers --version (or `binary`, a shell script)."""
+        import hashlib, io, tarfile
+        self.latest = version
+        script = binary or f"#!/bin/sh\necho {version}\n"
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            info = tarfile.TarInfo("await")
+            info.size, info.mode = len(script), 0o644   # like the old archives: not executable
+            tar.addfile(info, io.BytesIO(script.encode()))
+        archive = f"await-{version}-{target}.tar.gz"
+        self.files[f"/releases/download/{version}/{archive}"] = buf.getvalue()
+        if sums:
+            digest = checksum or hashlib.sha256(buf.getvalue()).hexdigest()
+            self.files[f"/releases/download/{version}/SHA256SUMS"] = f"{digest}  {archive}\n".encode()
+
+    def close(self):
+        self.answer.set()
+        self.server.shutdown()
+
+
 class TestUpdateNotifier:
     """Background check for a newer release, cached for a day."""
 
     def setup_method(self):
         self.dir = tempfile.mkdtemp()
         self.cache = os.path.join(self.dir, "await", "latest-version")
-        self.release = os.path.join(self.dir, "release.json")
-        self.env = {"XDG_CACHE_HOME": self.dir, "AWAIT_UPDATE_URL": "file://" + self.release}
-        self.env.pop("AWAIT_NO_UPDATE_CHECK", None)
+        self.releases = FakeReleases()
+        self.env = {"XDG_CACHE_HOME": self.dir, "AWAIT_RELEASES_URL": self.releases.url}
         os.environ.pop("AWAIT_NO_UPDATE_CHECK", None)
+        os.environ.pop("AWAIT_AUTO_UPDATE", None)
+
+    def teardown_method(self):
+        self.releases.close()
 
     def publish(self, version):
-        with open(self.release, "w") as f:
-            f.write(f'{{\n  "url": "x",\n  "tag_name": "{version}",\n  "name": "{version}"\n}}\n')
+        self.releases.publish(version)
 
     def cached(self, version, age_seconds=0):
         os.makedirs(os.path.dirname(self.cache), exist_ok=True)
@@ -1546,12 +1617,13 @@ class TestUpdateNotifier:
         assert returncode == 0
         assert "available" not in err            # nothing cached yet
         assert self.wait_for_cache("99.0.0")
+        assert "/releases/latest" in self.releases.requests   # the redirect, not the rate-limited API
 
     def test_newer_cached_version_is_announced(self):
         self.cached("99.0.0")
         returncode, err, _ = run_with_tty_stderr(["true"], self.env)
         assert returncode == 0
-        assert f"await 99.0.0 is available (you have {self.own_version()})" in err
+        assert f"await 99.0.0 is available (you have {self.own_version()}): run await --update" in err
 
     def test_versions_compare_numerically(self):
         major, minor, _ = self.own_version().split(".")
@@ -1571,6 +1643,7 @@ class TestUpdateNotifier:
         run_with_tty_stderr(["true"], self.env)
         time.sleep(1)
         assert open(self.cache).read().strip() == "1.0.0"
+        assert self.releases.requests == []
 
     def test_day_old_cache_is_refreshed(self):
         self.cached("1.0.0", age_seconds=25 * 60 * 60)
@@ -1579,7 +1652,7 @@ class TestUpdateNotifier:
         assert self.wait_for_cache("99.0.0")
 
     def test_failed_check_keeps_value_and_waits_a_day(self):
-        self.cached("1.0.0", age_seconds=25 * 60 * 60)   # release.json doesn't exist: fetch fails
+        self.cached("1.0.0", age_seconds=25 * 60 * 60)   # nothing published: /latest is a 404
         run_with_tty_stderr(["true"], self.env)
         deadline = time.time() + 5
         while time.time() < deadline and time.time() - os.path.getmtime(self.cache) > 60:
@@ -1589,68 +1662,49 @@ class TestUpdateNotifier:
 
     def test_check_does_not_delay_await(self):
         """The fetch runs detached: await exits while it is still waiting on the network."""
-        fifo = self.release
-        os.mkfifo(fifo)          # reading it blocks until something is written
+        self.publish("99.0.0")
+        self.releases.answer.clear()      # /latest hangs until set
         try:
             returncode, _, elapsed = run_with_tty_stderr(["true"], self.env)
             assert returncode == 0
             assert elapsed < 2, f"await waited {elapsed:.1f}s for the update check"
         finally:
-            # the detached fetch may not have opened the FIFO yet (ENXIO): retry briefly
-            fd, deadline = None, time.time() + 5
-            while fd is None and time.time() < deadline:
-                try:
-                    fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
-                except OSError:
-                    time.sleep(0.05)
-            if fd is not None:
-                os.write(fd, b'{"tag_name": "99.0.0"}\n')
-                os.close(fd)
+            self.releases.answer.set()
         assert self.wait_for_cache("99.0.0")
 
     def test_check_does_not_keep_callers_pipes_open(self):
         """The detached fetch must not inherit extra descriptors: a caller waiting
         for EOF on a pipe it passed to await gets it when await exits."""
-        os.mkfifo(self.release)          # the fetch blocks on this
-        read_end, write_end = os.pipe()  # an extra inheritable descriptor
-        os.set_inheritable(write_end, True)
+        import pty
+        self.publish("1.0.0")
+        self.releases.answer.clear()      # the fetch hangs on /latest
+        read_end, write_end = os.pipe()   # an extra descriptor the caller passes to await
+        master, slave = pty.openpty()
         try:
-            import pty
-            master, slave = pty.openpty()
             proc = subprocess.Popen(["../await", "true"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=slave, pass_fds=(write_end,), env={**os.environ, **self.env})
             os.close(slave)
             proc.wait(timeout=5)
             os.close(write_end)
             os.set_blocking(read_end, False)
-            deadline = time.time() + 2
-            while True:
+            eof, deadline = False, time.time() + 2
+            while not eof and time.time() < deadline:
                 try:
                     eof = os.read(read_end, 1) == b""
                 except BlockingIOError:
-                    eof = False
-                if eof or time.time() > deadline:
-                    break
-                time.sleep(0.05)
-            os.close(master)
+                    time.sleep(0.05)
             assert eof, "the background check kept the caller's pipe open"
         finally:
             os.close(read_end)
-            fd, deadline = None, time.time() + 5
-            while fd is None and time.time() < deadline:
-                try:
-                    fd = os.open(self.release, os.O_WRONLY | os.O_NONBLOCK)
-                except OSError:
-                    time.sleep(0.05)
-            if fd is not None:
-                os.write(fd, b'{"tag_name": "1.0.0"}\n')
-                os.close(fd)
+            os.close(master)
+            self.releases.answer.set()
 
     def test_no_check_when_not_interactive(self):
         self.publish("99.0.0")
         subprocess.run(["../await", "true"], capture_output=True, env={**os.environ, **self.env}, timeout=5)
         time.sleep(1)
         assert not os.path.exists(self.cache)
+        assert self.releases.requests == []
 
     def test_opt_out(self):
         self.cached("99.0.0", age_seconds=25 * 60 * 60)
@@ -1664,6 +1718,274 @@ class TestUpdateNotifier:
         self.cached("99.0.0")
         _, err, _ = run_with_tty_stderr(["-V", "true"], self.env)
         assert "available" not in err
+
+
+class TestSelfUpdate:
+    """await --update replaces the binary only after every check passes."""
+
+    def setup_method(self):
+        import shutil
+        self.releases = FakeReleases()
+        self.dir = tempfile.mkdtemp()
+        self.bin_dir = os.path.join(self.dir, "bin")
+        os.mkdir(self.bin_dir)
+        self.binary = os.path.join(self.bin_dir, "await")
+        shutil.copy("../await", self.binary)
+        self.version = subprocess.run([self.binary, "--version"], capture_output=True, text=True).stdout.strip()
+        self.env = {**os.environ, "AWAIT_RELEASES_URL": self.releases.url, "AWAIT_UPDATE_TARGET": "test-target",
+                    "XDG_CACHE_HOME": self.dir}
+        self.env.pop("AWAIT_NO_UPDATE_CHECK", None)
+        self.env.pop("AWAIT_AUTO_UPDATE", None)
+
+    def teardown_method(self):
+        import shutil
+        self.releases.close()
+        subprocess.run(["chmod", "-R", "u+w", self.dir])
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def update(self, binary=None, env=None):
+        result = subprocess.run([binary or self.binary, "--update"], capture_output=True, text=True,
+                                env=env or self.env, timeout=30)
+        return result.returncode, result.stderr
+
+    def installed_version(self, path=None):
+        return subprocess.run([path or self.binary, "--version"], capture_output=True, text=True).stdout.strip()
+
+    def assert_untouched(self):
+        assert self.installed_version() == self.version
+        assert not os.path.exists(self.binary + ".old")
+        leftovers = [f for f in os.listdir(self.bin_dir) if f.startswith(".await-update")]
+        assert leftovers == [], leftovers
+
+    def test_updates_in_place_and_keeps_a_backup(self):
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert f"updated {self.version} -> 99.0.0" in err
+        assert self.installed_version() == "99.0.0"
+        assert os.access(self.binary, os.X_OK)                          # executable, even from a non-executable archive
+        assert self.installed_version(self.binary + ".old") == self.version
+        assert [f for f in os.listdir(self.bin_dir) if f.startswith(".await-update")] == []
+
+    def test_a_running_await_is_not_disturbed(self):
+        """The new binary is renamed into place, so an await that is already running
+        keeps executing its own (old) file."""
+        self.releases.publish("99.0.0")
+        running = subprocess.Popen([self.binary, "-V", "sleep 1"], env=self.env)
+        time.sleep(0.2)
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert running.wait(timeout=10) == 0
+
+    def test_already_up_to_date(self):
+        self.releases.publish(self.version)
+        returncode, err = self.update()
+        assert returncode == 0
+        assert "already up to date" in err
+        self.assert_untouched()
+
+    def test_older_release_is_not_a_downgrade(self):
+        self.releases.publish("1.0.0")
+        returncode, err = self.update()
+        assert returncode == 0
+        assert "already up to date" in err
+        self.assert_untouched()
+
+    def test_checksum_mismatch_is_refused(self):
+        self.releases.publish("99.0.0", checksum="0" * 64)
+        returncode, err = self.update()
+        assert returncode != 0
+        assert "checksum mismatch" in err
+        self.assert_untouched()
+
+    def test_release_without_checksums_is_refused(self):
+        self.releases.publish("99.0.0", sums=False)
+        returncode, err = self.update()
+        assert returncode != 0
+        assert "SHA256SUMS" in err
+        self.assert_untouched()
+
+    def test_binary_that_does_not_run_here_is_refused(self):
+        """E.g. a build for the wrong libc: it must fail the test run, not replace us."""
+        self.releases.publish("99.0.0", binary="#!/bin/sh\nexit 1\n")
+        returncode, err = self.update()
+        assert returncode != 0
+        assert "doesn't run here" in err
+        self.assert_untouched()
+
+    def test_no_build_for_this_platform(self):
+        self.releases.publish("99.0.0", target="some-other-target")
+        returncode, err = self.update()
+        assert returncode != 0
+        assert "has no test-target build" in err
+        self.assert_untouched()
+
+    def test_unsupported_platform(self):
+        self.releases.publish("99.0.0")
+        returncode, err = self.update(env={**self.env, "AWAIT_UPDATE_TARGET": ""})
+        assert returncode != 0
+        assert "no prebuilt await" in err
+        self.assert_untouched()
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can write anywhere")
+    def test_unwritable_install_suggests_sudo(self):
+        self.releases.publish("99.0.0")
+        os.chmod(self.bin_dir, 0o555)
+        returncode, err = self.update()
+        assert returncode != 0
+        assert f"sudo {os.path.realpath(self.binary)} --update" in err
+        os.chmod(self.bin_dir, 0o755)
+        self.assert_untouched()
+
+    def test_package_managed_install_is_refused(self):
+        import shutil
+        cellar = os.path.join(self.dir, "Cellar", "await", self.version, "bin")
+        os.makedirs(cellar)
+        brewed = os.path.join(cellar, "await")
+        shutil.copy(self.binary, brewed)
+        self.releases.publish("99.0.0")
+        returncode, err = self.update(binary=brewed)
+        assert returncode != 0
+        assert "brew upgrade await" in err
+        assert self.installed_version(brewed) == self.version
+
+    def test_downloads_the_build_for_this_machine(self):
+        """Without an override, the archive is the one for this OS and CPU (the
+        static musl build on Linux)."""
+        machine = platform.machine().lower()
+        arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
+        target = f"{arch}-apple-darwin" if platform.system() == "Darwin" else f"{arch}-unknown-linux-musl"
+        self.releases.publish("99.0.0", target=target)
+        env = {k: v for k, v in self.env.items() if k != "AWAIT_UPDATE_TARGET"}
+        returncode, err = self.update(env=env)
+        assert returncode == 0, err
+        assert f"/releases/download/99.0.0/await-99.0.0-{target}.tar.gz" in self.releases.requests
+
+    def test_auto_update_in_the_background(self):
+        """AWAIT_AUTO_UPDATE=1: an interactive run's background check installs the update."""
+        import pty, select
+        self.releases.publish("99.0.0")
+        master, slave = pty.openpty()
+        proc = subprocess.Popen([self.binary, "true"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=slave, env={**self.env, "AWAIT_AUTO_UPDATE": "1"})
+        os.close(slave)
+        assert proc.wait(timeout=5) == 0
+        os.close(master)
+        deadline = time.time() + 10
+        while time.time() < deadline and self.installed_version() != "99.0.0":
+            time.sleep(0.1)
+        assert self.installed_version() == "99.0.0"
+
+    def test_no_auto_update_by_default(self):
+        import pty
+        self.releases.publish("99.0.0")
+        master, slave = pty.openpty()
+        proc = subprocess.Popen([self.binary, "true"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=slave, env=self.env)
+        os.close(slave)
+        assert proc.wait(timeout=5) == 0
+        os.close(master)
+        time.sleep(1.5)
+        assert self.installed_version() == self.version
+
+    def auto(self, **extra):
+        """An interactive run with AWAIT_AUTO_UPDATE=1; returns its stderr."""
+        _, err, _ = run_with_tty_stderr(["true"], {**self.env, "AWAIT_AUTO_UPDATE": "1", **extra},
+                                        binary=self.binary)
+        return err
+
+    def wait_for(self, condition, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline and not condition():
+            time.sleep(0.1)
+        return condition()
+
+    def test_symlink_at_the_backup_path_is_not_followed(self):
+        """Under sudo, a symlink planted at <path>.old must be replaced, not written through."""
+        victim = os.path.join(self.dir, "victim")
+        with open(victim, "w") as f:
+            f.write("precious\n")
+        os.symlink(victim, self.binary + ".old")
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert open(victim).read() == "precious\n"
+        assert not os.path.islink(self.binary + ".old")
+        assert self.installed_version(self.binary + ".old") == self.version
+
+    def test_no_backup_no_update(self):
+        blocker = self.binary + ".old"
+        os.mkdir(blocker)                                   # something rm -f can't clear
+        open(os.path.join(blocker, "keep"), "w").close()
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode != 0
+        assert "not updating" in err
+        assert "updated" not in err
+        assert self.installed_version() == self.version
+        assert [f for f in os.listdir(self.bin_dir) if f.startswith(".await-update")] == []
+
+    def test_one_update_at_a_time(self):
+        lock = os.path.join(self.bin_dir, ".await-update.lock")
+        os.mkdir(lock)                                      # an update in progress
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 12
+        assert "another await --update is running" in err
+        assert self.installed_version() == self.version
+        assert not os.path.exists(self.binary + ".old")
+        assert os.path.isdir(lock)                          # not ours to remove
+
+    def test_lock_left_by_a_killed_update_expires(self):
+        lock = os.path.join(self.bin_dir, ".await-update.lock")
+        os.mkdir(lock)
+        stale = time.time() - 20 * 60
+        os.utime(lock, (stale, stale))
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert not os.path.exists(lock)
+
+    def test_auto_update_installs_an_already_cached_version(self):
+        """AWAIT_AUTO_UPDATE set after the last check: the newer version in a fresh
+        cache is installed now, not once the cache expires."""
+        cache = os.path.join(self.dir, "await", "latest-version")
+        os.makedirs(os.path.dirname(cache))
+        with open(cache, "w") as f:
+            f.write("99.0.0\n")
+        self.releases.publish("99.0.0")
+        self.auto()
+        assert self.wait_for(lambda: self.installed_version() == "99.0.0")
+        assert open(cache).read().strip() == "99.0.0"
+
+    def test_auto_update_with_a_fresh_cache_tries_once_a_day(self):
+        cache = os.path.join(self.dir, "await", "latest-version")
+        os.makedirs(os.path.dirname(cache))
+        with open(cache, "w") as f:
+            f.write("99.0.0\n")
+        open(os.path.join(self.dir, "await", "auto-update"), "w").close()   # tried a moment ago
+        self.releases.publish("99.0.0")
+        self.auto()
+        time.sleep(1.5)
+        assert self.installed_version() == self.version
+        assert self.releases.requests == []
+
+    def test_failed_auto_update_is_reported(self):
+        self.releases.publish("99.0.0", checksum="0" * 64)
+        self.auto()
+        error = os.path.join(self.dir, "await", "update-error")
+        assert self.wait_for(lambda: os.path.exists(error) and os.path.getsize(error) > 0)
+        assert self.installed_version() == self.version
+        err = self.auto()
+        assert "automatic update failed: checksum mismatch" in err
+        assert "update.log" in err
+        # once an update succeeds, the report goes away
+        os.utime(os.path.join(self.dir, "await", "latest-version"), (0, 0))
+        self.releases.publish("99.0.0")
+        self.auto()
+        assert self.wait_for(lambda: self.installed_version() == "99.0.0")
+        assert self.wait_for(lambda: not os.path.exists(error))
 
 
 class TestOctalEscapes:

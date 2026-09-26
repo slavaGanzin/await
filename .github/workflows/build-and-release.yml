@@ -140,8 +140,51 @@ jobs:
         name: await-macos-latest-x86_64
         path: macos-latest-x86_64
 
+  # Static (musl) Linux builds: they run on any distro regardless of its libc,
+  # so these are what `await --update` installs on Linux (x86_64 and arm64)
+  build-linux-static:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Build static binary
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q musl-tools
+        cmake -B build-static/ -DCMAKE_C_COMPILER=musl-gcc -DCMAKE_EXE_LINKER_FLAGS=-static
+        cmake --build build-static/
+        file build-static/await | grep -q 'statically linked'
+        mkdir -p linux-musl-${{ matrix.arch }}
+        cp build-static/await build-static/await.fish build-static/await.bash build-static/await.zsh linux-musl-${{ matrix.arch }}/
+        cp build-static/await ./await
+
+    - name: Run tests
+      working-directory: tests
+      run: |
+        pip install -e .
+        pip install pytest pytest-timeout
+        pytest test_await.py -v
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: await-linux-musl-${{ matrix.arch }}
+        path: linux-musl-${{ matrix.arch }}
+
   release:
-    needs: build
+    needs: [build, build-linux-static]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -185,21 +228,18 @@ jobs:
 
         echo "Generating release notes from $PREV_TAG to $VERSION"
 
-        # Generate release notes from commits
-        RELEASE_NOTES="## Release $VERSION"
-        RELEASE_NOTES="${RELEASE_NOTES}\n\n### Changes since ${PREV_TAG}\n"
-
         # Get commit messages, excluding merge commits and version bumps
         COMMITS=$(git log ${PREV_TAG}..HEAD --oneline --no-merges --pretty=format:"- %s" | grep -v "^- Bump version")
 
-        if [ -z "$COMMITS" ]; then
-          RELEASE_NOTES="${RELEASE_NOTES}\n- Minor updates and improvements"
-        else
-          RELEASE_NOTES="${RELEASE_NOTES}\n${COMMITS}"
-        fi
-
-        # Save to file for multi-line handling
-        echo -e "$RELEASE_NOTES" > release_notes.md
+        # printf, not echo -e: commit subjects are data (e.g. "\0NN" must stay as typed)
+        {
+          printf '## Release %s\n\n### Changes since %s\n\n' "$VERSION" "$PREV_TAG"
+          if [ -z "$COMMITS" ]; then
+            printf '%s\n' "- Minor updates and improvements"
+          else
+            printf '%s\n' "$COMMITS"
+          fi
+        } > release_notes.md
 
         # Also output for logging
         echo "Release notes:"
@@ -241,6 +281,10 @@ jobs:
         cd await-macos-latest-arm64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-aarch64-apple-darwin.tar.gz * && cd ..
         cd await-macos-latest-x86_64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-apple-darwin.tar.gz * && cd ..
         cd await-ubuntu-latest && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-unknown-linux-gnu.tar.gz * && cd ..
+        cd await-linux-musl-x86_64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-unknown-linux-musl.tar.gz * && cd ..
+        cd await-linux-musl-aarch64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-aarch64-unknown-linux-musl.tar.gz * && cd ..
+        # `await --update` refuses to install anything it can't verify against this
+        (cd archives && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
         tree
 
     - name: Upload Release Artifacts
