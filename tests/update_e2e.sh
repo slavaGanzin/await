@@ -20,9 +20,16 @@ cp "$bin" "$a"
 built=$("$a" --version)
 
 if ! log=$(env -u AWAIT_RELEASES_URL -u AWAIT_UPDATE_TARGET AWAIT_UPDATE_FORCE=1 "$a" --update 2>&1); then
-  # a platform added after the latest release has nothing to install yet
+  # a platform added after the latest release has nothing to install yet:
+  # AWAIT_E2E_ALLOW_MISSING=<version> skips only releases older than <version>
+  # (the first release with this platform's build); after that it's a failure
   case $log in *"has no "*" build"*)
-    if [ -n "${AWAIT_E2E_ALLOW_MISSING:-}" ]; then echo "update e2e: skipped: $log"; exit 0; fi;;
+    since=${AWAIT_E2E_ALLOW_MISSING:-}
+    tag=$(printf '%s\n' "$log" | sed -n 's/.*release \([^ ]*\) has no .*/\1/p')
+    if [ -n "$since" ] && [ -n "$tag" ] && [ "${tag#v}" != "$since" ] &&
+       [ "$(printf '%s\n%s\n' "${tag#v}" "$since" | sort -V | head -n1)" = "${tag#v}" ]; then
+      echo "update e2e: skipped: release $tag predates $since, the first with this build"; exit 0
+    fi;;
   esac
   fail "await --update failed: $log"
 fi

@@ -1223,8 +1223,10 @@ static const char *release_target(void) {
   if (!strcmp(u.sysname, "Darwin")) return arm ? "aarch64-apple-darwin" : x86 ? "x86_64-apple-darwin" : "";
   // Linux gets the static (musl) build: it runs regardless of the distro's libc
   if (!strcmp(u.sysname, "Linux")) return arm ? "aarch64-unknown-linux-musl" : x86 ? "x86_64-unknown-linux-musl" : "";
-  // Windows: the MSYS2 build (runs in Git Bash / MSYS2, uname says MSYS_NT-... or CYGWIN_NT-...)
-  if (!strncmp(u.sysname, "MSYS_NT", 7) || !strncmp(u.sysname, "CYGWIN_NT", 9)) return x86 ? "x86_64-pc-windows-msys" : "";
+  // Windows: the MSYS2 build, for MSYS2 (uname: MSYS_NT-...) and Git Bash or
+  // MSYS2's MinGW shells (MINGW64_NT-..., MINGW32_NT-...). A plain Cygwin
+  // install (CYGWIN_NT-...) lacks msys-2.0.dll, so it gets no prebuilt build.
+  if (!strncmp(u.sysname, "MSYS_NT", 7) || !strncmp(u.sysname, "MINGW", 5)) return x86 ? "x86_64-pc-windows-msys" : "";
   return "";
 }
 

@@ -28,7 +28,7 @@ yay -S await
 
 # windows, in Git Bash or MSYS2: take await-<version>-x86_64-pc-windows-msys.tar.gz from
 # https://github.com/slavaGanzin/await/releases/latest and put await.exe on your PATH
-tar -xzf await-*-x86_64-pc-windows-msys.tar.gz -C ~/bin await.exe
+mkdir -p ~/bin && tar -xzf await-*-x86_64-pc-windows-msys.tar.gz -C ~/bin await.exe   # Git Bash puts ~/bin on PATH
 
 # not recommended, but it works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash

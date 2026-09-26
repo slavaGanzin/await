@@ -225,11 +225,14 @@ jobs:
         python -m pip install --break-system-packages pytest pytest-timeout
         python -m pytest test_await.py -v
 
-    # skipped until a release carries a Windows build
+    # releases before 2.11.0 have no Windows build; from 2.11.0 on a missing one fails
     - name: End-to-end update from the latest release
       env:
-        AWAIT_E2E_ALLOW_MISSING: 1
-      run: tests/update_e2e.sh ./await.exe
+        AWAIT_E2E_ALLOW_MISSING: 2.11.0
+      run: |
+        tests/update_e2e.sh ./await.exe
+        # Git Bash reports MINGW64_NT-... from uname
+        MSYSTEM=MINGW64 tests/update_e2e.sh ./await.exe
 
     - uses: actions/upload-artifact@v4
       with:

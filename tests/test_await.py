@@ -1903,6 +1903,12 @@ class TestSelfUpdate:
         returncode, err = self.update(env=env)
         assert returncode == 0, err
         assert f"/releases/download/99.0.0/await-99.0.0-{target}.tar.gz" in self.releases.requests
+        if platform.system().startswith("MSYS"):
+            # Git Bash (and MSYS2's MinGW shells) report MINGW64_NT-... from uname
+            import shutil
+            shutil.copy("../await", self.binary)
+            returncode, err = self.update(env={**env, "MSYSTEM": "MINGW64"})
+            assert returncode == 0, err
 
     def test_auto_update_in_the_background(self):
         """AWAIT_AUTO_UPDATE=1: an interactive run's background check installs the update."""
