@@ -1149,6 +1149,61 @@ class TestAutocompletion:
         assert "--lap" in result.stdout
 
 
+class TestHomebrewFormula:
+    """scripts/homebrew-formula.sh turns a release's SHA256SUMS into Formula/await.rb"""
+
+    SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "homebrew-formula.sh")
+    TARGETS = ["aarch64-apple-darwin", "x86_64-apple-darwin",
+               "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"]
+
+    def generate(self, tmp_path, version, sums):
+        (tmp_path / "SHA256SUMS").write_text(sums)
+        out = tmp_path / "await.rb"
+        result = subprocess.run(["bash", self.SCRIPT, version, str(tmp_path / "SHA256SUMS"), str(out)],
+                                capture_output=True, text=True)
+        return result, out
+
+    def test_formula_pins_every_prebuilt_archive(self, tmp_path):
+        version = "9.8.7"
+        shas = {t: format(i + 1, "x") * 64 for i, t in enumerate(self.TARGETS)}
+        sums = "".join(f"{s}  await-{version}-{t}.tar.gz\n" for t, s in shas.items())
+        sums += "f" * 64 + f"  await-{version}-x86_64-unknown-linux-gnu.tar.gz\n"   # not used by brew
+        result, out = self.generate(tmp_path, version, sums)
+        assert result.returncode == 0, result.stderr
+        formula = out.read_text()
+
+        assert "class Await < Formula" in formula
+        assert f'version "{version}"' in formula
+        assert 'license "MIT"' in formula
+        assert "linux-gnu" not in formula and "f" * 64 not in formula
+        base = f"https://github.com/slavaGanzin/await/releases/download/{version}"
+        lines = formula.splitlines()
+        for target, sha in shas.items():
+            url = f'url "{base}/await-{version}-{target}.tar.gz"'
+            i = next(n for n, line in enumerate(lines) if line.strip() == url)
+            assert lines[i + 1].strip() == f'sha256 "{sha}"'   # each url carries its own checksum
+        mac, linux = formula.index("on_macos do"), formula.index("on_linux do")
+        assert mac < formula.index("aarch64-apple-darwin") < formula.index("x86_64-apple-darwin") < linux
+        assert linux < formula.index("aarch64-unknown-linux-musl")
+
+        assert 'bin.install "await"' in formula
+        assert 'bash_completion.install "await.bash" => "await"' in formula
+        assert 'fish_completion.install "await.fish"' in formula
+        assert 'zsh_completion/"_await"' in formula
+        assert 'shell_output("#{bin}/await --version").strip' in formula
+
+        if __import__("shutil").which("ruby"):
+            check = subprocess.run(["ruby", "-c", str(out)], capture_output=True, text=True)
+            assert check.returncode == 0, check.stderr
+
+    def test_missing_archive_is_an_error(self, tmp_path):
+        sums = "a" * 64 + "  await-1.0.0-aarch64-apple-darwin.tar.gz\n"
+        result, out = self.generate(tmp_path, "1.0.0", sums)
+        assert result.returncode != 0
+        assert "x86_64-apple-darwin" in result.stderr
+        assert not out.exists()
+
+
 class TestNoColor:
     def test_help_not_colored_when_piped(self):
         returncode, stdout, stderr = run_await_with_timeout("--help")

@@ -39,3 +39,5 @@ Version is `AWAIT_VERSION` at the top of `await.c`; it is also what the update n
 Every push to `main` builds and publishes a release for the current `AWAIT_VERSION` (bump it for a new release). `await --update` depends on the release layout, so keep it stable:
 - archives named `await-<version>-<target>.tar.gz` with `await` at the top level; targets `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` (static), `x86_64-apple-darwin`, `aarch64-apple-darwin`
 - a `SHA256SUMS` file covering the archives (releases without it are refused)
+
+The repo is also a Homebrew tap (`brew tap slavaganzin/await https://github.com/slavaGanzin/await`). `Formula/await.rb` pins the prebuilt archives by checksum, and since every push to `main` re-uploads them, the release job regenerates it with `scripts/homebrew-formula.sh <version> <SHA256SUMS>` and commits it to `main` (`[skip ci]`). Don't edit the formula by hand; change the script. The `homebrew` CI job installs and tests the formula for the latest published release with brew on macOS and Linux.

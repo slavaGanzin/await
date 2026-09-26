@@ -190,10 +190,53 @@ jobs:
         name: await-linux-musl-${{ matrix.arch }}
         path: linux-musl-${{ matrix.arch }}
 
+  # The tap formula (Formula/await.rb) installs the latest published release:
+  # generate it from that release's SHA256SUMS and install and test it with brew
+  homebrew:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_ENV_HINTS: 1
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check the committed formula
+      run: ruby -c Formula/await.rb
+
+    - name: Install the formula for the latest release from a local tap
+      run: |
+        set -euo pipefail
+        [ -x /home/linuxbrew/.linuxbrew/bin/brew ] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        VERSION=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+        gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+        scripts/homebrew-formula.sh "$VERSION" "$RUNNER_TEMP/SHA256SUMS" "$RUNNER_TEMP/await.rb"
+        ruby -c "$RUNNER_TEMP/await.rb"
+        brew tap-new --no-git local/await
+        cp "$RUNNER_TEMP/await.rb" "$(brew --repository local/await)/Formula/await.rb"
+        brew install local/await/await
+        brew test local/await/await
+        await --version
+        ls "$(brew --prefix)/share/zsh/site-functions/_await" "$(brew --prefix)/etc/bash_completion.d/await" \
+           "$(brew --prefix)/share/fish/vendor_completions.d/await.fish"
+
   release:
     needs: [build, build-linux-static]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # pushes the regenerated Homebrew formula to main (and uploads the release)
+    permissions:
+      contents: write
+    # one release at a time: a queued newer run replaces an older queued one
+    concurrency:
+      group: release
+      cancel-in-progress: false
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
@@ -302,3 +345,38 @@ jobs:
         body_path: release_notes.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # The archives (so their checksums) change on every push to main, so the tap
+    # formula is regenerated from the SHA256SUMS just uploaded and committed to
+    # main. Pushes made with GITHUB_TOKEN don't start workflow runs (and the
+    # commit says [skip ci]), so this can't loop; nothing is committed when the
+    # formula is unchanged, and a run whose commit is no longer the newest on
+    # main leaves the formula to the newer run.
+    - name: Update Homebrew formula
+      env:
+        VERSION: ${{ steps.get_version.outputs.VERSION }}
+      run: |
+        set -euo pipefail
+        scripts/homebrew-formula.sh "$VERSION" archives/SHA256SUMS "$RUNNER_TEMP/await.rb"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        for attempt in 1 2 3; do
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "$GITHUB_SHA is no longer on main, not updating the formula"; exit 0
+          fi
+          if [ -n "$(git rev-list "$GITHUB_SHA..origin/main" -- . ':(exclude)Formula/await.rb')" ]; then
+            echo "main has newer commits, their release run updates the formula"; exit 0
+          fi
+          git checkout -q -B homebrew-formula origin/main
+          cp "$RUNNER_TEMP/await.rb" Formula/await.rb
+          if git diff --quiet -- Formula/await.rb; then
+            echo "Formula/await.rb is up to date"; exit 0
+          fi
+          git add Formula/await.rb
+          git commit -q -m "Update Homebrew formula for $VERSION [skip ci]"
+          git push origin HEAD:main && exit 0
+          sleep $((attempt * 5))
+        done
+        echo "could not push the formula update to main" >&2
+        exit 1

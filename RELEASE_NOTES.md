@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **Homebrew**: `brew tap slavaganzin/await https://github.com/slavaGanzin/await && brew install slavaganzin/await/await` installs the prebuilt release on macOS and Linux (arm64 and x86_64), with bash, zsh and fish completions; `brew upgrade await` updates it. The formula is regenerated from each release's `SHA256SUMS`.
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
