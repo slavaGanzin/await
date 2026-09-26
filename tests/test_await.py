@@ -1480,6 +1480,192 @@ class TestCmdTimeoutAndRetry:
                 os.remove(counter)
 
 
+def run_with_tty_stderr(args, env, timeout=5.0):
+    """Run await with stderr on a pseudo-terminal, like an interactive shell.
+    Returns (returncode, stderr, seconds)."""
+    import pty, select
+    master, slave = pty.openpty()
+    start = time.time()
+    proc = subprocess.Popen(["../await"] + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=slave, env={**os.environ, **env})
+    os.close(slave)
+    err = b""
+    while time.time() - start < timeout:
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if ready:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            err += chunk
+        elif proc.poll() is not None:
+            break
+    proc.wait(timeout=timeout)
+    os.close(master)
+    return proc.returncode, err.decode(errors="replace"), time.time() - start
+
+
+class TestUpdateNotifier:
+    """Background check for a newer release, cached for a day."""
+
+    def setup_method(self):
+        self.dir = tempfile.mkdtemp()
+        self.cache = os.path.join(self.dir, "await", "latest-version")
+        self.release = os.path.join(self.dir, "release.json")
+        self.env = {"XDG_CACHE_HOME": self.dir, "AWAIT_UPDATE_URL": "file://" + self.release}
+        self.env.pop("AWAIT_NO_UPDATE_CHECK", None)
+        os.environ.pop("AWAIT_NO_UPDATE_CHECK", None)
+
+    def publish(self, version):
+        with open(self.release, "w") as f:
+            f.write(f'{{\n  "url": "x",\n  "tag_name": "{version}",\n  "name": "{version}"\n}}\n')
+
+    def cached(self, version, age_seconds=0):
+        os.makedirs(os.path.dirname(self.cache), exist_ok=True)
+        with open(self.cache, "w") as f:
+            f.write(version + "\n")
+        mtime = time.time() - age_seconds
+        os.utime(self.cache, (mtime, mtime))
+
+    def wait_for_cache(self, expected, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(self.cache) and open(self.cache).read().strip() == expected:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def own_version(self):
+        return subprocess.run(["../await", "--version"], capture_output=True, text=True).stdout.strip()
+
+    def test_first_run_fetches_in_background(self):
+        self.publish("99.0.0")
+        returncode, err, _ = run_with_tty_stderr(["true"], self.env)
+        assert returncode == 0
+        assert "available" not in err            # nothing cached yet
+        assert self.wait_for_cache("99.0.0")
+
+    def test_newer_cached_version_is_announced(self):
+        self.cached("99.0.0")
+        returncode, err, _ = run_with_tty_stderr(["true"], self.env)
+        assert returncode == 0
+        assert f"await 99.0.0 is available (you have {self.own_version()})" in err
+
+    def test_versions_compare_numerically(self):
+        major, minor, _ = self.own_version().split(".")
+        self.cached(f"{major}.{int(minor) + 1}.0")   # e.g. 2.10.0 when running 2.9.0
+        _, err, _ = run_with_tty_stderr(["true"], self.env)
+        assert "available" in err
+
+    def test_same_or_older_version_is_quiet(self):
+        for version in (self.own_version(), "v" + self.own_version(), "1.0.0"):
+            self.cached(version)
+            _, err, _ = run_with_tty_stderr(["true"], self.env)
+            assert "available" not in err, version
+
+    def test_fresh_cache_is_not_refetched(self):
+        self.cached("1.0.0", age_seconds=60)
+        self.publish("99.0.0")
+        run_with_tty_stderr(["true"], self.env)
+        time.sleep(1)
+        assert open(self.cache).read().strip() == "1.0.0"
+
+    def test_day_old_cache_is_refreshed(self):
+        self.cached("1.0.0", age_seconds=25 * 60 * 60)
+        self.publish("99.0.0")
+        run_with_tty_stderr(["true"], self.env)
+        assert self.wait_for_cache("99.0.0")
+
+    def test_failed_check_keeps_value_and_waits_a_day(self):
+        self.cached("1.0.0", age_seconds=25 * 60 * 60)   # release.json doesn't exist: fetch fails
+        run_with_tty_stderr(["true"], self.env)
+        deadline = time.time() + 5
+        while time.time() < deadline and time.time() - os.path.getmtime(self.cache) > 60:
+            time.sleep(0.05)
+        assert time.time() - os.path.getmtime(self.cache) < 60, "cache wasn't timestamped"
+        assert open(self.cache).read().strip() == "1.0.0"
+
+    def test_check_does_not_delay_await(self):
+        """The fetch runs detached: await exits while it is still waiting on the network."""
+        fifo = self.release
+        os.mkfifo(fifo)          # reading it blocks until something is written
+        try:
+            returncode, _, elapsed = run_with_tty_stderr(["true"], self.env)
+            assert returncode == 0
+            assert elapsed < 2, f"await waited {elapsed:.1f}s for the update check"
+        finally:
+            # the detached fetch may not have opened the FIFO yet (ENXIO): retry briefly
+            fd, deadline = None, time.time() + 5
+            while fd is None and time.time() < deadline:
+                try:
+                    fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:
+                    time.sleep(0.05)
+            if fd is not None:
+                os.write(fd, b'{"tag_name": "99.0.0"}\n')
+                os.close(fd)
+        assert self.wait_for_cache("99.0.0")
+
+    def test_check_does_not_keep_callers_pipes_open(self):
+        """The detached fetch must not inherit extra descriptors: a caller waiting
+        for EOF on a pipe it passed to await gets it when await exits."""
+        os.mkfifo(self.release)          # the fetch blocks on this
+        read_end, write_end = os.pipe()  # an extra inheritable descriptor
+        os.set_inheritable(write_end, True)
+        try:
+            import pty
+            master, slave = pty.openpty()
+            proc = subprocess.Popen(["../await", "true"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=slave, pass_fds=(write_end,), env={**os.environ, **self.env})
+            os.close(slave)
+            proc.wait(timeout=5)
+            os.close(write_end)
+            os.set_blocking(read_end, False)
+            deadline = time.time() + 2
+            while True:
+                try:
+                    eof = os.read(read_end, 1) == b""
+                except BlockingIOError:
+                    eof = False
+                if eof or time.time() > deadline:
+                    break
+                time.sleep(0.05)
+            os.close(master)
+            assert eof, "the background check kept the caller's pipe open"
+        finally:
+            os.close(read_end)
+            fd, deadline = None, time.time() + 5
+            while fd is None and time.time() < deadline:
+                try:
+                    fd = os.open(self.release, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError:
+                    time.sleep(0.05)
+            if fd is not None:
+                os.write(fd, b'{"tag_name": "1.0.0"}\n')
+                os.close(fd)
+
+    def test_no_check_when_not_interactive(self):
+        self.publish("99.0.0")
+        subprocess.run(["../await", "true"], capture_output=True, env={**os.environ, **self.env}, timeout=5)
+        time.sleep(1)
+        assert not os.path.exists(self.cache)
+
+    def test_opt_out(self):
+        self.cached("99.0.0", age_seconds=25 * 60 * 60)
+        self.publish("98.0.0")
+        _, err, _ = run_with_tty_stderr(["true"], {**self.env, "AWAIT_NO_UPDATE_CHECK": "1"})
+        time.sleep(1)
+        assert "available" not in err
+        assert open(self.cache).read().strip() == "99.0.0"
+
+    def test_silent_hides_notice(self):
+        self.cached("99.0.0")
+        _, err, _ = run_with_tty_stderr(["-V", "true"], self.env)
+        assert "available" not in err
+
+
 class TestOctalEscapes:
     def test_octal_escape_is_not_a_placeholder(self):
         """\\001 is printf's octal escape, not \\1: output must not change between runs."""

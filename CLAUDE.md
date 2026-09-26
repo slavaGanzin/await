@@ -30,4 +30,4 @@ cd tests && pytest test_await.py -v
 
 ## Version
 
-Version is hardcoded in `await.c` — search for `printf("2.x.x\n")` in the `case 'v':` handler.
+Version is `AWAIT_VERSION` at the top of `await.c`; it is also what the update notifier compares against the latest GitHub release.
