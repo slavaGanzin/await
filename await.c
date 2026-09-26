@@ -1283,7 +1283,7 @@ int run_update(void) {
     "trap 'exit 130' HUP INT TERM\n"
     "tmp=$(mktemp -d \"$dir/.await-update.XXXXXX\") || { say \"can't create a temporary directory in $dir\"; exit 6; }\n"
     "archive=await-$tag-$target.tar.gz\n"
-    "say \"downloading await $new ($target)\"\n"
+    "say \"downloading $base/download/$tag/$archive\"\n"
     "fetch \"$base/download/$tag/$archive\" \"$tmp/$archive\" || { say \"release $tag has no $target build ($archive)\"; exit 7; }\n"
     "fetch \"$base/download/$tag/SHA256SUMS\" \"$tmp/SHA256SUMS\" || { say \"release $tag publishes no SHA256SUMS; not installing an unverified binary\"; exit 8; }\n"
     "want=$(awk -v f=\"$archive\" '$2 == f || $2 == \"*\" f { print $1 }' \"$tmp/SHA256SUMS\")\n"
