@@ -1864,6 +1864,8 @@ class TestSelfUpdate:
         self.assert_untouched()
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can write anywhere")
+    @pytest.mark.skipif(platform.system().startswith(("MSYS", "CYGWIN")),
+                        reason="chmod can't make a directory read-only on Windows")
     def test_unwritable_install_suggests_sudo(self):
         self.releases.publish("99.0.0")
         os.chmod(self.bin_dir, 0o555)
@@ -1890,7 +1892,12 @@ class TestSelfUpdate:
         static musl build on Linux)."""
         machine = platform.machine().lower()
         arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
-        target = f"{arch}-apple-darwin" if platform.system() == "Darwin" else f"{arch}-unknown-linux-musl"
+        if platform.system() == "Darwin":
+            target = f"{arch}-apple-darwin"
+        elif platform.system().startswith(("MSYS", "CYGWIN")):
+            target = "x86_64-pc-windows-msys"
+        else:
+            target = f"{arch}-unknown-linux-musl"
         self.releases.publish("99.0.0", target=target)
         env = {k: v for k, v in self.env.items() if k != "AWAIT_UPDATE_TARGET"}
         returncode, err = self.update(env=env)
