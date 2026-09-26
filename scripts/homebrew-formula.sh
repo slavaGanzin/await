@@ -2,12 +2,41 @@
 # Generate the Homebrew formula (Formula/await.rb) for a published release.
 #
 #   scripts/homebrew-formula.sh <version> <SHA256SUMS> [output]   (output defaults to Formula/await.rb)
+#   scripts/homebrew-formula.sh --check <SHA256SUMS> [formula]
+#     exits 1 (naming each mismatch) unless every url/sha256 pin in the
+#     formula matches SHA256SUMS
 #
 # The formula installs the prebuilt release archives, pinned by the checksums in
 # that release's SHA256SUMS. The release job runs this after every upload (the
 # archives, and so their checksums, change on every push to main), so don't edit
 # Formula/await.rb by hand.
 set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ "${1:-}" = --check ]; then
+  [ $# -ge 2 ] && [ $# -le 3 ] || { echo "usage: $0 --check <SHA256SUMS> [formula]" >&2; exit 2; }
+  sums=$2
+  formula=${3:-"$root/Formula/await.rb"}
+  [ -r "$sums" ] || { echo "can't read $sums" >&2; exit 2; }
+  [ -r "$formula" ] || { echo "can't read $formula" >&2; exit 2; }
+  # every url must be followed by the sha256 that SHA256SUMS lists for that archive
+  awk -v formula="$formula" '
+    NR == FNR { if (length($1) == 64) { f = $2; sub(/^\*/, "", f); live[f] = $1 }; next }
+    /^[ \t]*url "/ { u = $0; sub(/^[ \t]*url "/, "", u); sub(/".*/, "", u); n = split(u, p, "/"); file = p[n]; next }
+    /^[ \t]*sha256 "/ && file != "" {
+      h = $0; sub(/^[ \t]*sha256 "/, "", h); sub(/".*/, "", h); pairs++
+      if (!(file in live)) { print formula ": " file " is not in SHA256SUMS"; bad++ }
+      else if (live[file] != h) { print formula ": " file " pins " h ", SHA256SUMS has " live[file]; bad++ }
+      file = ""
+    }
+    END {
+      if (pairs < 4) { print formula ": expected 4 url/sha256 pairs, found " pairs + 0; bad++ }
+      if (bad) exit 1
+      print formula ": all " pairs " url/sha256 pairs match SHA256SUMS"
+    }' "$sums" "$formula"
+  exit
+fi
 
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
   echo "usage: $0 <version> <SHA256SUMS> [output]" >&2
@@ -16,7 +45,7 @@ fi
 
 version=$1
 sums=$2
-out=${3:-"$(cd "$(dirname "$0")/.." && pwd)/Formula/await.rb"}
+out=${3:-"$root/Formula/await.rb"}
 
 case $version in
   ''|*[!0-9A-Za-z.+-]*) echo "bad version: $version" >&2; exit 2;;

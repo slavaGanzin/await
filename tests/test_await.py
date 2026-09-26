@@ -1196,6 +1196,22 @@ class TestHomebrewFormula:
             check = subprocess.run(["ruby", "-c", str(out)], capture_output=True, text=True)
             assert check.returncode == 0, check.stderr
 
+    def test_check_catches_stale_pins(self, tmp_path):
+        version = "1.2.3"
+        sums = "".join(f"{format(i + 1, 'x') * 64}  await-{version}-{t}.tar.gz\n" for i, t in enumerate(self.TARGETS))
+        result, out = self.generate(tmp_path, version, sums)
+        assert result.returncode == 0, result.stderr
+        check = lambda: subprocess.run(["bash", self.SCRIPT, "--check", str(tmp_path / "SHA256SUMS"), str(out)],
+                                       capture_output=True, text=True)
+        assert check().returncode == 0, check().stdout
+
+        # the archives were re-published: one checksum changed
+        (tmp_path / "SHA256SUMS").write_text(sums.replace("2" * 64, "e" * 64))
+        stale = check()
+        assert stale.returncode == 1
+        assert f"await-{version}-x86_64-apple-darwin.tar.gz pins {'2' * 64}" in stale.stdout
+        assert "aarch64-apple-darwin" not in stale.stdout
+
     def test_missing_archive_is_an_error(self, tmp_path):
         sums = "a" * 64 + "  await-1.0.0-aarch64-apple-darwin.tar.gz\n"
         result, out = self.generate(tmp_path, "1.0.0", sums)
