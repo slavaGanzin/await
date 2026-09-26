@@ -228,21 +228,18 @@ jobs:
 
         echo "Generating release notes from $PREV_TAG to $VERSION"
 
-        # Generate release notes from commits
-        RELEASE_NOTES="## Release $VERSION"
-        RELEASE_NOTES="${RELEASE_NOTES}\n\n### Changes since ${PREV_TAG}\n"
-
         # Get commit messages, excluding merge commits and version bumps
         COMMITS=$(git log ${PREV_TAG}..HEAD --oneline --no-merges --pretty=format:"- %s" | grep -v "^- Bump version")
 
-        if [ -z "$COMMITS" ]; then
-          RELEASE_NOTES="${RELEASE_NOTES}\n- Minor updates and improvements"
-        else
-          RELEASE_NOTES="${RELEASE_NOTES}\n${COMMITS}"
-        fi
-
-        # Save to file for multi-line handling
-        echo -e "$RELEASE_NOTES" > release_notes.md
+        # printf, not echo -e: commit subjects are data (e.g. "\0NN" must stay as typed)
+        {
+          printf '## Release %s\n\n### Changes since %s\n\n' "$VERSION" "$PREV_TAG"
+          if [ -z "$COMMITS" ]; then
+            printf '%s\n' "- Minor updates and improvements"
+          else
+            printf '%s\n' "$COMMITS"
+          fi
+        } > release_notes.md
 
         # Also output for logging
         echo "Release notes:"
