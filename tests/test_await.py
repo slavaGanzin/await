@@ -1164,6 +1164,289 @@ class TestNoColor:
         assert not re.search(r"\x1b\[[0-9;]*m", result.stderr)
 
 
+class TestNotify:
+    """--notify: terminal escape sequences, native notifiers, bell."""
+
+    STUBS = ("notify-send", "gdbus", "kdialog", "osascript", "terminal-notifier")
+    # stubs log their argv as one JSON line; STUB_EXIT_<name> / STUB_SLEEP_<name> steer them
+    STUB = """#!/usr/bin/env python3
+import json, os, sys, time
+name = os.path.basename(sys.argv[0]).replace("-", "_")
+with open(os.environ["NOTIFY_LOG"], "a") as f:
+    f.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\\n")
+time.sleep(float(os.environ.get("STUB_SLEEP_" + name, "0")))
+sys.exit(int(os.environ.get("STUB_EXIT_" + name, "0")))
+"""
+
+    @pytest.fixture
+    def notify(self, tmp_path):
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        for stub in self.STUBS:
+            (bindir / stub).write_text(self.STUB)
+            (bindir / stub).chmod(0o755)
+        log, tty = tmp_path / "calls.log", tmp_path / "tty"
+        tty.write_bytes(b"")
+        await_bin = os.path.abspath("../await")
+
+        def run(args, env=None, desktop=True, timeout=10):
+            base = {k: v for k, v in os.environ.items()
+                    if k not in ("TERM_PROGRAM", "LC_TERMINAL", "KITTY_WINDOW_ID", "WT_SESSION", "TMUX",
+                                 "SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT", "DISPLAY", "WAYLAND_DISPLAY",
+                                 "DBUS_SESSION_BUS_ADDRESS")}
+            base.update(PATH=f"{bindir}:{os.environ['PATH']}", TERM="xterm-256color", NOTIFY_LOG=str(log),
+                        AWAIT_NOTIFY_TTY=str(tty), AWAIT_NO_UPDATE_CHECK="1")
+            if desktop:
+                base["DISPLAY"] = ":0"
+            base.update(env or {})
+            start = time.time()
+            result = subprocess.run([await_bin] + args, env=base, cwd=tmp_path, capture_output=True,
+                                    timeout=timeout)
+            result.seconds = time.time() - start
+            import json
+            result.calls = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+            result.tty = tty.read_bytes()
+            return result
+        run.tmp = tmp_path
+        return run
+
+    def only_call(self, result, name="notify-send"):
+        assert [c[0] for c in result.calls] == [name], result.calls
+        return result.calls[0]
+
+    def test_without_notify_nothing_happens(self, notify):
+        r = notify(["-V", "true"])
+        assert r.returncode == 0
+        assert r.calls == [] and r.tty == b""
+
+    def test_success(self, notify):
+        r = notify(["--notify", "-V", "true", "echo hi"])
+        assert r.returncode == 0
+        call = self.only_call(r)
+        assert call[1:4] == ["-a", "await", "await"]
+        assert re.fullmatch(r"done in \d+\.\ds: 2/2 commands succeeded", call[4]), call
+        assert r.tty == b""
+
+    def test_notifies_without_silent_too(self, notify):
+        r = notify(["--notify", "true"])
+        assert r.returncode == 0
+        assert self.only_call(r)[4].startswith("done in ")
+
+    def test_timeout(self, notify):
+        r = notify(["--notify", "-V", "-T", "1", "true", "exit 3"])
+        assert r.returncode == 1
+        body = self.only_call(r)[4]
+        assert re.fullmatch(r"timed out after 1\.\ds: 1/2 commands succeeded; exit 3 exited 3", body), body
+
+    def test_failure_single_command(self, notify):
+        r = notify(["--notify", "-V", "-r", "1", "exit 127"])
+        assert r.returncode == 1
+        assert self.only_call(r)[4] == "gave up after 1 attempts: exit 127 exited 127 (command not found)"
+
+    def test_exec(self, notify):
+        r = notify(["--notify", "-V", "true", "--exec", "exit 4"])
+        assert r.returncode == 4
+        body = self.only_call(r)[4]
+        assert body.startswith("done in ") and body.endswith("true exited 0; --exec finished (exit 4)"), body
+
+    def test_name_in_title(self, notify):
+        r = notify(["--notify", "-V", "-n", "web", "true"])
+        assert r.returncode == 0
+        call = self.only_call(r)
+        assert call[3] == "await: web"
+        assert call[4].endswith(": web exited 0")
+
+    def test_fail_mode(self, notify):
+        r = notify(["--notify", "-V", "-f", "false", "exit 2"])
+        assert r.returncode == 0
+        assert self.only_call(r)[4].endswith("2/2 commands failed")
+
+    def test_falls_back_to_gdbus(self, notify):
+        r = notify(["--notify", "-V", "-n", 'say "hi"', "true"], env={"STUB_EXIT_notify_send": "1"})
+        assert r.returncode == 0
+        assert [c[0] for c in r.calls] == ["notify-send", "gdbus"]
+        gdbus = r.calls[1]
+        assert gdbus[1:10] == ["call", "--session", "--dest", "org.freedesktop.Notifications",
+                               "--object-path", "/org/freedesktop/Notifications",
+                               "--method", "org.freedesktop.Notifications.Notify", "await"]
+        assert gdbus[10:12] == ["0", "''"]
+        # title and body as GVariant string literals
+        assert gdbus[12] == '"await: say \\"hi\\""'
+        assert gdbus[13].startswith('"done in ') and gdbus[13].endswith('"')
+        assert gdbus[14:] == ["[]", "{}", "5000"]
+        assert r.tty == b""
+
+    def test_falls_back_to_kdialog(self, notify):
+        r = notify(["--notify", "-V", "true"], env={"STUB_EXIT_notify_send": "1", "STUB_EXIT_gdbus": "1"})
+        assert r.returncode == 0
+        assert [c[0] for c in r.calls] == ["notify-send", "gdbus", "kdialog"]
+        kdialog = r.calls[2]
+        assert kdialog[1:4] == ["--title", "await", "--passivepopup"]
+        assert kdialog[4].startswith("done in ") and kdialog[5] == "5"
+        assert r.tty == b""
+
+    def test_bell_when_everything_fails(self, notify):
+        r = notify(["--notify", "-V", "false", "-r", "1"],
+                   env={"STUB_EXIT_notify_send": "1", "STUB_EXIT_gdbus": "1", "STUB_EXIT_kdialog": "1"})
+        assert r.returncode == 1
+        assert [c[0] for c in r.calls] == ["notify-send", "gdbus", "kdialog"]
+        assert r.tty == b"\a"
+
+    def test_bell_without_desktop(self, notify):
+        r = notify(["--notify", "-V", "true"], desktop=False)
+        assert r.returncode == 0
+        assert r.calls == [] and r.tty == b"\a"
+
+    def test_desktop_via_wayland_or_dbus(self, notify):
+        for var in ("WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
+            r = notify(["--notify", "-V", "true"], desktop=False, env={var: "x"})
+            assert r.calls[-1][0] == "notify-send"
+
+    @pytest.mark.parametrize("env,sequence", [
+        ({"TERM_PROGRAM": "WezTerm"}, b"\x1b]9;await: done in "),
+        ({"TERM_PROGRAM": "iTerm.app"}, b"\x1b]9;await: done in "),
+        ({"LC_TERMINAL": "iTerm2"}, b"\x1b]9;await: done in "),
+        ({"TERM_PROGRAM": "vscode"}, b"\x1b]9;await: done in "),
+        ({"WT_SESSION": "1"}, b"\x1b]9;await: done in "),
+        ({"TERM_PROGRAM": "ghostty"}, b"\x1b]777;notify;await;done in "),
+        ({"TERM": "foot-extra"}, b"\x1b]777;notify;await;done in "),
+        ({"KITTY_WINDOW_ID": "1"}, b"\x1b]99;i=await:d=0;await\x1b\\\x1b]99;i=await:p=body;done in "),
+        ({"TERM": "xterm-kitty"}, b"\x1b]99;i=await:d=0;await\x1b\\\x1b]99;i=await:p=body;done in "),
+    ])
+    def test_terminal_sequences(self, notify, env, sequence):
+        r = notify(["--notify", "-V", "true"], env=env)
+        assert r.returncode == 0
+        assert r.tty.startswith(sequence), r.tty
+        assert r.tty.endswith(b"\x1b\\" if b"]99;" in sequence else b"\a")
+        assert r.tty.count(b"\a") <= 1
+        assert r.calls == []
+
+    def test_osc_777_fields_have_no_extra_semicolons(self, notify):
+        r = notify(["--notify", "-V", "-n", "a;b", "true", "--exec", "true"], env={"TERM_PROGRAM": "ghostty"})
+        assert r.tty.startswith(b"\x1b]777;notify;await: a,b;done in ")
+        assert r.tty.count(b";") == 3
+
+    def test_tmux_passthrough(self, notify):
+        r = notify(["--notify", "-V", "true"], env={"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux-0/default,1,0"})
+        assert r.returncode == 0
+        assert r.tty.startswith(b"\x1bPtmux;\x1b\x1b]9;await: done in ")
+        assert r.tty.endswith(b"\a\x1b\\")
+        assert r.tty.count(b"\x1b") == 4  # DCS, the doubled ESC, and the one ending the passthrough
+        assert r.calls == []
+
+    def test_ssh_uses_the_terminal_only(self, notify):
+        for var in ("SSH_CONNECTION", "SSH_TTY"):
+            r = notify(["--notify", "-V", "true"], env={var: "10.0.0.1 1 10.0.0.2 22"})
+            assert r.returncode == 0
+            assert re.fullmatch(rb"\x1b\]9;await: done in [^\x07\x1b]*\x07\x07", r.tty), r.tty
+            assert r.calls == []
+            (notify.tmp / "tty").write_bytes(b"")
+
+    def test_ssh_known_terminal(self, notify):
+        r = notify(["--notify", "-V", "true"], env={"SSH_TTY": "/dev/pts/1", "KITTY_WINDOW_ID": "3"})
+        assert r.tty.startswith(b"\x1b]99;") and b"\a" not in r.tty
+        assert r.calls == []
+
+    def assert_clean(self, text):
+        text.encode("utf-8")  # valid UTF-8: no surrogate-escaped bytes
+        assert not re.search(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]", text), repr(text)
+
+    def assert_nothing_ran(self, notify):
+        import pathlib
+        for d in (notify.tmp, pathlib.Path(".")):
+            assert not any(p.name.startswith("pwned") for p in d.iterdir())
+
+    def test_hostile_name(self, notify):
+        name = (b"$(touch pwned) `touch pwned2` 'q' \"dq\" \x1b]0;evil\x07\x1b[31m \xff\xfe\xc3(\n\n"
+                + "\u2603".encode() * 3000)
+        r = notify([b"--notify", b"-V", b"-n", name, b"true"])
+        assert r.returncode == 0
+        self.assert_nothing_ran(notify)
+        title, body = self.only_call(r)[3:5]
+        for text in (title, body):
+            self.assert_clean(text)
+        label = "$(touch pwned) `touch pwned2` 'q' \"dq\" ]0;evil [31m ( \u2603"
+        assert title.startswith("await: " + label) and title.endswith("\u2603\u2026")
+        assert len(title.encode()) <= len("await: ") + 60
+        assert re.fullmatch(r"done in \d\.\ds: " + re.escape(label) + "\u2603*\u2026 exited 0", body), body
+        assert len(body.encode()) <= 200
+
+    def test_hostile_command(self, notify):
+        cmd = b"true '$(touch pwned3) \x1b]9;x\x07\x9b \xe2\x80\xae\xc0\xaf\xed\xa0\x80a\xc3\xa9 " + b"y" * 10000 + b"'"
+        r = notify([b"--notify", b"-V", b"-r", b"1", cmd, b"exit 1"], env={"STUB_EXIT_notify_send": "1"})
+        assert r.returncode == 1
+        self.assert_nothing_ran(notify)
+        assert [c[0] for c in r.calls] == ["notify-send", "gdbus"]
+        body = r.calls[0][4]
+        self.assert_clean(body)
+        assert body.startswith("gave up after 1 attempts: 1/2 commands succeeded; exit 1 exited 1")
+        # the gdbus copy is the same text as a GVariant literal
+        assert r.calls[1][13] == '"' + body + '"'
+        r = notify([b"--notify", b"-V", cmd])
+        body = r.calls[-1][4]
+        self.assert_clean(body)
+        assert re.fullmatch(r"done in \d\.\ds: true '\$\(touch pwned3\) \]9;x aé y+\u2026 exited 0", body), body
+        assert len(body.encode()) <= 200
+        self.assert_nothing_ran(notify)
+
+    def test_hung_notifier_does_not_delay_exit(self, notify):
+        r = notify(["--notify", "-V", "exit 3", "-r", "1"], env={"STUB_SLEEP_notify_send": "30"})
+        assert r.returncode == 1
+        assert r.seconds < 3.5
+        # the 2s budget is spent: straight to the bell
+        assert [c[0] for c in r.calls] == ["notify-send"]
+        assert r.tty == b"\a"
+
+    def test_hung_notifier_keeps_exec_status(self, notify):
+        r = notify(["--notify", "-V", "true", "--exec", "exit 5"], env={"STUB_SLEEP_notify_send": "30"})
+        assert r.returncode == 5 and r.seconds < 3.5
+
+    def test_forever_exec_notifies_each_run(self, notify):
+        runs = notify.tmp / "runs"
+        r = notify(["--notify", "-V", "-F", "-T", "1.5", "true", "--exec", f"echo x >> {runs}"])
+        assert r.returncode == 1
+        bodies = [c[4] for c in r.calls]
+        execs = [b for b in bodies if b == "true exited 0; --exec finished (exit 0)"]
+        assert bodies[-1].startswith("timed out after 1.")
+        assert len(execs) == len(bodies) - 1
+        count = len(runs.read_text().splitlines())
+        assert count >= 2 and len(execs) in (count, count - 1), (count, bodies)
+
+    def test_service_keeps_notify(self, notify):
+        home = notify.tmp / "home"
+        home.mkdir()
+        for stub in ("systemctl", "journalctl"):
+            (notify.tmp / "bin" / stub).write_text("#!/bin/sh\nexit 0\n")
+            (notify.tmp / "bin" / stub).chmod(0o755)
+        r = notify(["--notify", "true", "--service", "t"], env={"HOME": str(home)})
+        assert r.returncode == 0
+        unit = (home / ".config/systemd/user/t.service").read_text()
+        exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
+        assert "--notify" in exec_start and "--update" not in exec_start
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS notifiers")
+    def test_macos_terminal_notifier(self, notify):
+        r = notify(["--notify", "-V", "-n", "web", "true"], desktop=False)
+        assert r.returncode == 0
+        call = self.only_call(r, "terminal-notifier")
+        assert call[1:4] == ["-title", "await: web", "-message"]
+        assert call[4].startswith("done in ")
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS notifiers")
+    def test_macos_osascript(self, notify):
+        r = notify(["--notify", "-V", "-n", 'x" & (do shell script "touch pwned") & "', "true"],
+                   desktop=False, env={"STUB_EXIT_terminal_notifier": "1"})
+        assert r.returncode == 0
+        assert [c[0] for c in r.calls] == ["terminal-notifier", "osascript"]
+        assert r.calls[1][1:7] == ["-e", "on run argv",
+                                   "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+                                   "-e", "end run"]
+        assert r.calls[1][7] == 'await: x" & (do shell script "touch pwned") & "'
+        assert r.calls[1][8].startswith("done in ")
+        assert len(r.calls[1]) == 9
+        assert r.tty == b""
+
+
 class TestJson:
     def test_json_output_success(self):
         """--json emits valid JSON on success."""

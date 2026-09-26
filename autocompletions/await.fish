@@ -16,6 +16,7 @@ complete -c await -l forever -s F -d 'Do not exit ever'
 complete -c await -l name -s n -d 'Label for the next command (usable as \\name in --exec)' -r
 complete -c await -l json -s j -d 'Output results as JSON on exit'
 complete -c await -l lap -s l -d 'Show last run duration per command in spinner'
+complete -c await -l notify -d 'Desktop notification when await finishes'
 complete -c await -l service -s S -d 'Create systemd user service with same parameters and activate it'
 complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'
 complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'

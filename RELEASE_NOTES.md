@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **`--notify`** sends a desktop notification with the outcome when await finishes (`done in 12s: 3/3 commands succeeded`, `timed out after 5m: ...`), and with `--forever` each time `--exec` finishes, even with `--silent`. It uses the terminal's own notifications where supported (iTerm2, WezTerm, ghostty, kitty, foot, Windows Terminal, VS Code; also through tmux and over SSH), then `terminal-notifier`/`osascript` on macOS, `notify-send`/`gdbus`/`kdialog` on Linux, a PowerShell toast on Windows, and a terminal bell as the last resort. Notifiers run without a shell, the text is sanitized, and a missing, failing or hung notifier never changes the exit code or delays exit by more than 2 s.
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
