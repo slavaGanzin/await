@@ -764,7 +764,7 @@ void help() {
   "# set NO_COLOR=1 to disable colors\n"
   "# in an interactive terminal, await checks for a newer release in the background (at most daily)\n"
   "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off,\n"
-  "# or AWAIT_AUTO_UPDATE=1 to have that check run --update for you\n"
+  "# or AWAIT_AUTO_UPDATE=1 to have that check run --update for you (a failure is reported on the next run)\n"
 
   // "# waiting for pup's author new blog post\n"
   // "  await 'mv /tmp/eric.new /tmp/eric.old &>/dev/null; http \"https://ericchiang.github.io/\" | pup \"a attr{href}\" > /tmp/eric.new; diff /tmp/eric.new /tmp/eric.old' --fail --exec 'ntfy send \"new article $1\"'\n\n"
@@ -1271,8 +1271,17 @@ int run_update(void) {
     "newer \"$new\" \"$cur\" || { say \"already up to date ($cur)\"; exit 0; }\n"
     "dir=$(dirname \"$self\")\n"
     "[ -w \"$dir\" ] || { say \"no permission to replace $self; run: sudo $self --update\"; exit 6; }\n"
+    // one update at a time (a manual one and a background one could otherwise
+    // both back up and swap); a lock left by a killed update expires after 10m
+    "lock=$dir/.await-update.lock\n"
+    "if ! mkdir \"$lock\" 2>/dev/null; then\n"
+    "  [ -n \"$(find \"$lock\" -maxdepth 0 -mmin +10 2>/dev/null)\" ] && rmdir \"$lock\" 2>/dev/null && mkdir \"$lock\" 2>/dev/null"
+    " || { say \"another await --update is running ($lock)\"; exit 12; }\n"
+    "fi\n"
+    "tmp=\n"
+    "trap 'rm -rf \"$tmp\"; rmdir \"$lock\"' EXIT\n"
+    "trap 'exit 130' HUP INT TERM\n"
     "tmp=$(mktemp -d \"$dir/.await-update.XXXXXX\") || { say \"can't create a temporary directory in $dir\"; exit 6; }\n"
-    "trap 'rm -rf \"$tmp\"' EXIT\n"
     "archive=await-$tag-$target.tar.gz\n"
     "say \"downloading await $new ($target)\"\n"
     "fetch \"$base/download/$tag/$archive\" \"$tmp/$archive\" || { say \"release $tag has no $target build ($archive)\"; exit 7; }\n"
@@ -1286,7 +1295,13 @@ int run_update(void) {
     "chmod +x \"$tmp/x/await\"\n"
     "ran=$(\"$tmp/x/await\" --version 2>/dev/null)\n"
     "[ \"$ran\" = \"$new\" ] || { say \"the downloaded await doesn't run here (--version gave '${ran:-nothing}'); staying on $cur\"; exit 10; }\n"
-    "cp -p \"$self\" \"$self.old\" 2>/dev/null || say \"couldn't keep a backup at $self.old\"\n"
+    // the backup is copied inside our own temp dir and renamed into place:
+    // rename replaces whatever is at $self.old (a symlink included) instead of
+    // writing through it. No backup, no update.
+    "cp -p \"$self\" \"$tmp/old\" || { say \"couldn't back up $self; not updating\"; exit 11; }\n"
+    "rm -f \"$self.old\" 2>/dev/null\n"
+    "{ [ ! -e \"$self.old\" ] && [ ! -L \"$self.old\" ] && mv -f \"$tmp/old\" \"$self.old\"; }"
+    " || { say \"couldn't keep a backup at $self.old; not updating\"; exit 11; }\n"
     "mv -f \"$tmp/x/await\" \"$self\" || { say \"couldn't replace $self\"; exit 11; }\n"
     "say \"updated $cur -> $new ($self; the previous version is kept at $self.old)\"\n";
   fflush(stdout);
@@ -1340,21 +1355,56 @@ void update_check() {
       : "await %s is available (you have %s): run await --update\n",
       latest, AWAIT_VERSION);
 
-  struct stat st;
-  if (stat(cache, &st) == 0 && time(NULL) - st.st_mtime < 24 * 60 * 60) return;
-
   // AWAIT_AUTO_UPDATE=1: the background check also updates this binary
   const char *autoupdate = getenv("AWAIT_AUTO_UPDATE");
-  char self[PATH_MAX] = "";
-  if (autoupdate && *autoupdate && strcmp(autoupdate, "0") != 0 && self_path(self, sizeof(self)) != 0)
-    self[0] = '\0';
+  int autoupdating = autoupdate && *autoupdate && strcmp(autoupdate, "0") != 0;
+  char self[PATH_MAX] = "", stamp[PATH_MAX], error[PATH_MAX];
+  snprintf(stamp, sizeof(stamp), "%s/auto-update", dir);
+  snprintf(error, sizeof(error), "%s/update-error", dir);
+  if (autoupdating && self_path(self, sizeof(self)) != 0) autoupdating = 0;
 
-  // touch first, so a failed or offline check also waits a day before retrying
+  // an automatic update runs out of sight, so say when the last one failed
+  char failure[512] = "";
+  if (autoupdating && (f = fopen(error, "r"))) {
+    if (!fgets(failure, sizeof(failure), f)) failure[0] = '\0';
+    fclose(f);
+    failure[strcspn(failure, "\n")] = '\0';
+  }
+  if (*failure && !args.silent)
+    fprintf(stderr, use_color()
+      ? "\033[33mautomatic update failed: %s (log: %s/update.log)\033[0m\n"
+      : "automatic update failed: %s (log: %s/update.log)\n",
+      failure, dir);
+
+  struct stat st;
+  time_t now = time(NULL);
+  int check = !(stat(cache, &st) == 0 && now - st.st_mtime < 24 * 60 * 60);
+  // a newer version may already be cached (e.g. AWAIT_AUTO_UPDATE was set after
+  // the last check): install it without waiting for the cache to expire, but
+  // attempt that at most once a day too
+  int install = autoupdating && (check || (*latest && version_cmp(latest, AWAIT_VERSION) > 0
+    && !(stat(stamp, &st) == 0 && now - st.st_mtime < 24 * 60 * 60)));
+  if (!check && !install) return;
+  if (!install) self[0] = '\0';
+
+  // touch first, so a failed or offline check also waits a day before retrying.
+  // An automatic update keeps its output in update.log and its failure (last
+  // line) in update-error, which the next interactive run shows.
   const char *script = UPDATE_SH_HELPERS
-    "mkdir -p \"$1\" && touch \"$2\" || exit\n"
-    "tag=$(latest_tag \"$3\") || exit\n"
-    "printf '%s\\n' \"$tag\" > \"$2.$$\" && mv \"$2.$$\" \"$2\"\n"
-    "[ -z \"$4\" ] || \"$4\" --update >> \"$1/update.log\" 2>&1\n";
+    "mkdir -p \"$1\" || exit\n"
+    "if [ -n \"$5\" ]; then\n"
+    "  touch \"$2\" || exit\n"
+    "  tag=$(latest_tag \"$3\") || exit\n"
+    "  printf '%s\\n' \"$tag\" > \"$2.$$\" && mv \"$2.$$\" \"$2\"\n"
+    "fi\n"
+    "[ -n \"$4\" ] || exit 0\n"
+    "touch \"$1/auto-update\"\n"
+    "\"$4\" --update > \"$1/update.log\" 2>&1\n"
+    "case $? in\n"
+    "  0) rm -f \"$1/update-error\";;\n"
+    "  12) ;;  # another update was running: not a failure\n"
+    "  *) tail -n 1 \"$1/update.log\" | sed 's/^await: //' > \"$1/update-error\";;\n"
+    "esac\n";
 
   fflush(stdout);
   fflush(stderr);
@@ -1373,7 +1423,7 @@ void update_check() {
     long max_fd = sysconf(_SC_OPEN_MAX);
     if (max_fd < 0 || max_fd > 65536) max_fd = 65536;
     for (int fd = STDERR_FILENO + 1; fd < max_fd; fd++) close(fd);
-    execl("/bin/sh", "sh", "-c", script, "await-update-check", dir, cache, releases_url(), self, NULL);
+    execl("/bin/sh", "sh", "-c", script, "await-update-check", dir, cache, releases_url(), self, check ? "1" : "", NULL);
     _exit(127);
   }
   if (pid > 0) waitpid(pid, NULL, 0);

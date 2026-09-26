@@ -1480,13 +1480,13 @@ class TestCmdTimeoutAndRetry:
                 os.remove(counter)
 
 
-def run_with_tty_stderr(args, env, timeout=5.0):
+def run_with_tty_stderr(args, env, timeout=5.0, binary="../await"):
     """Run await with stderr on a pseudo-terminal, like an interactive shell.
     Returns (returncode, stderr, seconds)."""
     import pty, select
     master, slave = pty.openpty()
     start = time.time()
-    proc = subprocess.Popen(["../await"] + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+    proc = subprocess.Popen([binary] + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=slave, env={**os.environ, **env})
     os.close(slave)
     err = b""
@@ -1887,6 +1887,105 @@ class TestSelfUpdate:
         os.close(master)
         time.sleep(1.5)
         assert self.installed_version() == self.version
+
+    def auto(self, **extra):
+        """An interactive run with AWAIT_AUTO_UPDATE=1; returns its stderr."""
+        _, err, _ = run_with_tty_stderr(["true"], {**self.env, "AWAIT_AUTO_UPDATE": "1", **extra},
+                                        binary=self.binary)
+        return err
+
+    def wait_for(self, condition, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline and not condition():
+            time.sleep(0.1)
+        return condition()
+
+    def test_symlink_at_the_backup_path_is_not_followed(self):
+        """Under sudo, a symlink planted at <path>.old must be replaced, not written through."""
+        victim = os.path.join(self.dir, "victim")
+        with open(victim, "w") as f:
+            f.write("precious\n")
+        os.symlink(victim, self.binary + ".old")
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert open(victim).read() == "precious\n"
+        assert not os.path.islink(self.binary + ".old")
+        assert self.installed_version(self.binary + ".old") == self.version
+
+    def test_no_backup_no_update(self):
+        blocker = self.binary + ".old"
+        os.mkdir(blocker)                                   # something rm -f can't clear
+        open(os.path.join(blocker, "keep"), "w").close()
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode != 0
+        assert "not updating" in err
+        assert "updated" not in err
+        assert self.installed_version() == self.version
+        assert [f for f in os.listdir(self.bin_dir) if f.startswith(".await-update")] == []
+
+    def test_one_update_at_a_time(self):
+        lock = os.path.join(self.bin_dir, ".await-update.lock")
+        os.mkdir(lock)                                      # an update in progress
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 12
+        assert "another await --update is running" in err
+        assert self.installed_version() == self.version
+        assert not os.path.exists(self.binary + ".old")
+        assert os.path.isdir(lock)                          # not ours to remove
+
+    def test_lock_left_by_a_killed_update_expires(self):
+        lock = os.path.join(self.bin_dir, ".await-update.lock")
+        os.mkdir(lock)
+        stale = time.time() - 20 * 60
+        os.utime(lock, (stale, stale))
+        self.releases.publish("99.0.0")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert not os.path.exists(lock)
+
+    def test_auto_update_installs_an_already_cached_version(self):
+        """AWAIT_AUTO_UPDATE set after the last check: the newer version in a fresh
+        cache is installed now, not once the cache expires."""
+        cache = os.path.join(self.dir, "await", "latest-version")
+        os.makedirs(os.path.dirname(cache))
+        with open(cache, "w") as f:
+            f.write("99.0.0\n")
+        self.releases.publish("99.0.0")
+        self.auto()
+        assert self.wait_for(lambda: self.installed_version() == "99.0.0")
+        assert open(cache).read().strip() == "99.0.0"
+
+    def test_auto_update_with_a_fresh_cache_tries_once_a_day(self):
+        cache = os.path.join(self.dir, "await", "latest-version")
+        os.makedirs(os.path.dirname(cache))
+        with open(cache, "w") as f:
+            f.write("99.0.0\n")
+        open(os.path.join(self.dir, "await", "auto-update"), "w").close()   # tried a moment ago
+        self.releases.publish("99.0.0")
+        self.auto()
+        time.sleep(1.5)
+        assert self.installed_version() == self.version
+        assert self.releases.requests == []
+
+    def test_failed_auto_update_is_reported(self):
+        self.releases.publish("99.0.0", checksum="0" * 64)
+        self.auto()
+        error = os.path.join(self.dir, "await", "update-error")
+        assert self.wait_for(lambda: os.path.exists(error) and os.path.getsize(error) > 0)
+        assert self.installed_version() == self.version
+        err = self.auto()
+        assert "automatic update failed: checksum mismatch" in err
+        assert "update.log" in err
+        # once an update succeeds, the report goes away
+        os.utime(os.path.join(self.dir, "await", "latest-version"), (0, 0))
+        self.releases.publish("99.0.0")
+        self.auto()
+        assert self.wait_for(lambda: self.installed_version() == "99.0.0")
+        assert self.wait_for(lambda: not os.path.exists(error))
 
 
 class TestOctalEscapes:

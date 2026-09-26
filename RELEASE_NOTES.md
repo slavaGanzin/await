@@ -4,8 +4,8 @@
 
 ### New Features
 
-- **`await --update`** replaces the binary with the latest release, safely: it downloads the build for your OS and CPU, verifies it against the release's `SHA256SUMS`, checks that the new binary actually runs on this machine, keeps the previous one as `<path>.old`, and swaps it in with an atomic rename (a running await is unaffected). Any failure leaves you on the version you have. Installs managed by Nix, Homebrew or pacman/AUR are left to those tools, and an unwritable directory gets a `sudo` hint.
-- **`AWAIT_AUTO_UPDATE=1`** makes the daily background check run `--update` for you (off by default).
+- **`await --update`** replaces the binary with the latest release, safely: it downloads the build for your OS and CPU, verifies it against the release's `SHA256SUMS`, checks that the new binary actually runs on this machine, keeps the previous one as `<path>.old` (no backup, no update), and swaps it in with an atomic rename (a running await is unaffected). Any failure leaves you on the version you have, and only one update runs at a time. Installs managed by Nix, Homebrew or pacman/AUR are left to those tools, and an unwritable directory gets a `sudo` hint.
+- **`AWAIT_AUTO_UPDATE=1`** makes the daily background check run `--update` for you (off by default). It also installs a newer version that is already cached, and if an automatic update fails, your next interactive run says why (details in `~/.cache/await/update.log`).
 - **Static Linux builds for x86_64 and arm64** (`*-unknown-linux-musl`): they run on any distro, including Alpine and older glibc systems, and on arm64 machines such as Raspberry Pi and AWS Graviton, which had no build before.
 
 ### Changes
