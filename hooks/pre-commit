@@ -165,6 +165,15 @@ await 'ps aux | head -10' --watch --interval 2
 await 'tail -5 /var/log/system.log' --watch
 \`\`\`
 
+### Back off while something is down
+\`\`\`bash
+# Checks 0.2s, 0.4s, 0.8s ... apart (+-10% jitter), never more than 60s; a success resets the pace
+await 'curl -sf https://api.example.com' --backoff 60
+
+# --timeout still ends the wait on time, however long the current pause
+await 'pg_isready -h db' --interval 1 --backoff 30 --timeout 300
+\`\`\`
+
 ## --help
 \`\`\`bash
 $(./build/await --help | sed 's/\x1b\[[0-9;]*m//g')

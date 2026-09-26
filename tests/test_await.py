@@ -787,7 +787,7 @@ class TestService:
         shutil.copy("../await", binary)
 
         result = subprocess.run(
-            [binary, "--name", "web", "--json", "--lap", "-i", "0.5",
+            [binary, "--name", "web", "--json", "--lap", "-i", "0.5", "--backoff", "30",
              'curl -sf "http://x/$HOME" | grep 100%', "--service", "t"],
             env={**os.environ, "HOME": home, "PATH": bindir + ":" + os.environ["PATH"]},
             capture_output=True, text=True, timeout=5,
@@ -798,7 +798,7 @@ class TestService:
             unit = f.read()
         exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
         assert exec_start.startswith(f'ExecStart="{binary}" ')
-        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"'):
+        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"', '--backoff "30"'):
             assert flag in exec_start
         # systemd expands $ and % and ends the argument at an unescaped quote
         assert '"curl -sf \\"http://x/$$HOME\\" | grep 100%%"' in exec_start
@@ -2046,6 +2046,112 @@ class TestExitCleanup:
         finally:
             if os.path.exists(marker):
                 os.remove(marker)
+
+
+class TestBackoff:
+    """--backoff MAX: after each failed check the command's pause doubles
+    (from --interval, +-10% jitter, capped at MAX); a success resets it."""
+
+    @staticmethod
+    def run_times(await_args, log, duration):
+        """Run await, polling the log its command appends a line to on each run;
+        returns (returncode, [time of each run relative to the first])."""
+        open(log, "w").close()
+        proc = subprocess.Popen(f"exec ../await {await_args}", shell=True,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        times, seen = [], 0
+        deadline = time.time() + duration
+        while time.time() < deadline and proc.poll() is None:
+            with open(log) as f:
+                n = len(f.readlines())
+            now = time.time()
+            times += [now] * (n - seen)
+            seen = n
+            time.sleep(0.002)
+        if proc.poll() is None:
+            proc.kill()
+        returncode = proc.wait()
+        return returncode, [t - times[0] for t in times]
+
+    @pytest.fixture
+    def log(self):
+        path = os.path.join(TMPDIR, f"await_backoff_{os.getpid()}_{time.time_ns()}")
+        yield path
+        for p in (path, path + ".script"):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def test_intervals_double_up_to_the_cap(self, log):
+        returncode, times = self.run_times(
+            f'-V --interval 0.1 --backoff 0.8 "echo x >> {log}; false"', log, 3.4)
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        # 0.1 0.2 0.4 0.8 0.8 ... each +-10% (and a little scheduling slack)
+        assert len(gaps) >= 5, gaps
+        for gap, expected in zip(gaps, [0.1, 0.2, 0.4, 0.8, 0.8, 0.8]):
+            assert expected * 0.85 <= gap <= expected * 1.1 + 0.04, (gaps, expected)
+
+    def test_cap_is_respected(self, log):
+        returncode, times = self.run_times(
+            f'-V --interval 0.1 --backoff 0.3 "echo x >> {log}; false"', log, 2.2)
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        assert len(gaps) >= 6, gaps
+        # jitter never takes a pause past MAX
+        assert max(gaps) <= 0.3 + 0.04, gaps
+        assert all(g >= 0.25 for g in gaps[2:]), gaps
+
+    def test_success_resets_the_interval(self, log):
+        # runs 1-4 fail (pauses 0.1 0.2 0.4 0.8), run 5 succeeds, then failures again
+        script = log + ".script"
+        with open(script, "w") as f:
+            f.write(f'n=$(wc -l < "{log}"); echo x >> "{log}"; [ "$n" -eq 4 ]\n')
+        returncode, times = self.run_times(
+            f'-V --forever --interval 0.1 --backoff 0.8 "sh {script}"', log, 2.6)
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        assert len(gaps) >= 6, gaps
+        assert gaps[3] >= 0.65, gaps           # after the 4th failure: 0.8
+        assert gaps[4] <= 0.1 + 0.05, gaps     # after the success: back to --interval
+        assert gaps[5] <= 0.1 * 1.1 + 0.05, gaps  # then growing again from there
+
+    def test_timeout_is_not_overshot(self):
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V -T 1 --interval 0.1 --backoff 30 "false"', timeout=5.0,
+            description="The 30s backoff pause must not delay the 1s timeout")
+        elapsed = time.time() - start
+        assert returncode == 1
+        assert elapsed < 1.6, f"took {elapsed:.2f}s"
+
+    def test_success_during_backoff_is_noticed_at_next_check(self, log):
+        """A command that starts succeeding is picked up at its next check."""
+        script = log + ".script"
+        with open(script, "w") as f:
+            f.write(f'n=$(wc -l < "{log}"); echo x >> "{log}"; [ "$n" -ge 3 ]\n')
+        open(log, "w").close()
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --interval 0.1 --backoff 0.8 "sh {script}"', timeout=5.0)
+        assert returncode == 0
+        # pauses 0.1 0.2 0.4, then the 4th run succeeds
+        assert 0.6 <= time.time() - start < 1.5
+
+    @pytest.mark.parametrize("value", ["abc", "0", "-1", "", "1s"])
+    def test_invalid_max(self, value):
+        returncode, stdout, stderr = run_await_with_timeout(f'--backoff "{value}" true')
+        assert returncode == 2
+        assert "--backoff" in stderr
+
+    @pytest.mark.parametrize("flags", ["--interval 1 --backoff 0.5", "--backoff 0.5 --interval 1"])
+    def test_max_below_interval(self, flags):
+        returncode, stdout, stderr = run_await_with_timeout(f'{flags} true')
+        assert returncode == 2
+        assert "--interval" in stderr
+
+    def test_unchanged_without_flag(self, log):
+        returncode, times = self.run_times(
+            f'-V --interval 0.1 "echo x >> {log}; false"', log, 1.2)
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        assert len(gaps) >= 7, gaps
+        assert max(gaps) <= 0.1 + 0.05, gaps
 
 
 class TestPublishOrder:

@@ -4,6 +4,8 @@
 
 ### New Features
 
+- **`--backoff MAX`**: after each unsuccessful check of a command, the pause before its next one doubles, starting from `--interval` and capped at MAX seconds, with ±10% jitter so commands don't poll in lockstep; a successful check brings it back to `--interval` (`await 'curl -sf https://api.example.com' --backoff 60`). It spaces out the runs `--retry` counts, and `--timeout` still ends the wait on time.
+
 ### Changes
 
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
