@@ -887,6 +887,135 @@ class TestService:
             assert "invalid --service name" in result.stderr
         assert not os.path.exists(os.path.join(home, "Library"))
 
+    @staticmethod
+    def _service_file(home, name):
+        if platform.system() == "Darwin":
+            return os.path.join(home, f"Library/LaunchAgents/await.{name}.plist")
+        return os.path.join(home, f".config/systemd/user/{name}.service")
+
+    def test_service_rejects_invalid_utf8_argument(self):
+        home = tempfile.mkdtemp()
+        env = {**os.environ, "HOME": home, "AWAIT_SERVICE_NO_ACTIVATE": "1"}
+        result = subprocess.run([b"../await", b"-f", b"echo \xff\xfe", b"--service", b"u"],
+                                env=env, capture_output=True, timeout=5)
+        assert result.returncode == 2, result.stderr
+        assert b"argument 2 contains invalid UTF-8" in result.stderr
+        assert not os.path.exists(self._service_file(home, "u"))
+        # valid multibyte UTF-8 is fine
+        result = self._run_service(["echo 'h\u00e9llo \u2713 \U0001F600'", "--service", "u"], home)
+        assert result.returncode == 0, result.stderr
+        assert os.path.exists(self._service_file(home, "u"))
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_launchd_rejects_control_characters(self):
+        import plistlib
+        home = tempfile.mkdtemp()
+        result = self._run_service(["true", "printf '\x1b[31mred'", "--service", "c"], home)
+        assert result.returncode == 2, result.stderr
+        assert "argument 2 contains a control character" in result.stderr
+        assert not os.path.exists(self._service_file(home, "c"))
+
+        result = self._run_service(["true", "--service", "c"], home,
+                                   {"PATH": os.environ["PATH"] + ":/tmp/\x1b"})
+        assert result.returncode == 2, result.stderr
+        assert "PATH contains a control character" in result.stderr
+        assert not os.path.exists(self._service_file(home, "c"))
+
+        # tab, newline and carriage return are representable and must round-trip
+        cmd = "printf 'a\tb\r\nc'\necho d\r"
+        result = self._run_service([cmd, "--service", "c"], home)
+        assert result.returncode == 0, result.stderr
+        plist_path = self._service_file(home, "c")
+        lint = subprocess.run(["plutil", "-lint", plist_path], capture_output=True, text=True)
+        assert lint.returncode == 0, lint.stdout + lint.stderr
+        with open(plist_path, "rb") as f:
+            assert plistlib.load(f)["ProgramArguments"][1:] == [cmd]
+
+    def test_service_fails_in_deleted_directory(self):
+        home = tempfile.mkdtemp()
+        root = tempfile.mkdtemp()
+        result = subprocess.run(
+            ["sh", "-c", 'mkdir gone && cd gone && rmdir ../gone && exec "$0" true --service gone',
+             os.path.realpath("../await")],
+            cwd=root, env={**os.environ, "HOME": home, "AWAIT_SERVICE_NO_ACTIVATE": "1"},
+            capture_output=True, text=True, timeout=5)
+        assert result.returncode == 1, result.stderr
+        assert "working directory" in result.stderr
+        assert not os.path.exists(self._service_file(home, "gone"))
+
+    @staticmethod
+    def _stub_bin(names):
+        """Stubs that log their name and argv as JSON lines to $STUB_LOG and
+        exit with $STUB_RC_<SUBCOMMAND> (default 0)."""
+        import sys
+        bindir = tempfile.mkdtemp()
+        for name in names:
+            path = os.path.join(bindir, name)
+            with open(path, "w") as f:
+                f.write(f"#!{sys.executable}\n"
+                        "import json, os, sys\n"
+                        "with open(os.environ['STUB_LOG'], 'a') as f:\n"
+                        "    f.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + '\\n')\n"
+                        "sub = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+                        "sys.exit(int(os.environ.get('STUB_RC_' + sub.upper().replace('-', '_'), '0')))\n")
+            os.chmod(path, 0o755)
+        return bindir
+
+    @staticmethod
+    def _stub_calls(log):
+        import json
+        if not os.path.exists(log):
+            return []
+        with open(log) as f:
+            return [json.loads(line) for line in f]
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_launchd_activation(self):
+        bindir = self._stub_bin(["launchctl"])
+        uid = os.getuid()
+        for rcs, want_rc, want_load in (
+            ({}, 0, False),
+            ({"STUB_RC_BOOTSTRAP": "5"}, 0, True),
+            ({"STUB_RC_BOOTSTRAP": "5", "STUB_RC_LOAD": "1"}, 1, True),
+        ):
+            home = tempfile.mkdtemp()
+            log = os.path.join(home, "calls.jsonl")
+            env = {k: v for k, v in os.environ.items() if k != "AWAIT_SERVICE_NO_ACTIVATE"}
+            env.update({"HOME": home, "PATH": bindir + ":" + os.environ["PATH"],
+                        "STUB_LOG": log, "STUB_RC_BOOTOUT": "3", **rcs})
+            result = subprocess.run(["../await", "true", "--service", "act"],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            plist = self._service_file(home, "act")
+            expected = [["launchctl", "bootout", f"gui/{uid}/await.act"],
+                        ["launchctl", "bootstrap", f"gui/{uid}", plist]]
+            if want_load:
+                expected.append(["launchctl", "load", "-w", plist])
+            assert self._stub_calls(log) == expected, (rcs, result.stderr)
+            assert result.returncode == want_rc, (rcs, result.stderr)
+            if want_rc == 0:
+                assert "launchctl bootout gui/$UID/await.act" in result.stdout
+            else:
+                assert "launchctl could not load" in result.stderr
+
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
+    def test_service_systemd_activation(self):
+        bindir = self._stub_bin(["systemctl", "journalctl"])
+        home = tempfile.mkdtemp()
+        log = os.path.join(home, "calls.jsonl")
+        env = {k: v for k, v in os.environ.items() if k != "AWAIT_SERVICE_NO_ACTIVATE"}
+        env.update({"HOME": home, "PATH": bindir + ":" + os.environ["PATH"], "STUB_LOG": log})
+        result = subprocess.run(["../await", "true", "--service", "act"],
+                                env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert self._stub_calls(log) == [
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "cat", "--user", "act.service"],
+            ["systemctl", "enable", "--user", "act.service"],
+            ["systemctl", "restart", "--user", "act.service"],
+            ["journalctl", "--user", "--follow", "--unit", "act.service"],
+        ]
+        assert os.path.exists(self._service_file(home, "act"))
+
 
 class TestNoStderrFlag:
     """Test --no-stderr / -E flag functionality."""

@@ -1084,6 +1084,7 @@ static void plist_string(FILE *fp, const char *indent, const char *s) {
       case '>': fputs("&gt;", fp); break;
       case '"': fputs("&quot;", fp); break;
       case '\'': fputs("&apos;", fp); break;
+      case '\r': fputs("&#13;", fp); break; // a literal CR would be read back as \n
       default: fputc(*s, fp);
     }
   }
@@ -1109,19 +1110,7 @@ static int run_argv(char *const argv[], int quiet) {
 }
 
 // --service on macOS: a launchd agent in ~/Library/LaunchAgents
-int service() {
-  const char *home;
-  if ((home = getenv("HOME")) == NULL)
-      home = getpwuid(getuid())->pw_dir;
-
-  char binary[PATH_MAX];
-  if (self_path(binary, sizeof(binary)) != 0) {
-    fprintf(stderr, "await: --service cannot find the path of this binary\n");
-    return 1;
-  }
-  char cwd[PATH_MAX];
-  if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, "/");
-
+static int service(const char *home, const char *binary, const char *cwd) {
   size_t n = strlen(home) + strlen(args.service) + 64;
   char *label = malloc(n), *agents = malloc(n), *plist = malloc(n), *logs = malloc(n), *log = malloc(n);
   if (!label || !agents || !plist || !logs || !log) {
@@ -1201,21 +1190,10 @@ int service() {
 }
 #else
 // --service on Linux: a systemd user unit in ~/.config/systemd/user
-int service() {
+static int service(const char *home, const char *binary, const char *cwd) {
   FILE * fp;
-  const char *home;
-  if ((home = getenv("HOME")) == NULL)
-      home = getpwuid(getuid())->pw_dir;
-
   char* service = replace("NAME", args.service, "NAME.service");
   char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
-  char cwd[PATH_MAX];
-  if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, "/");
-  char binary[PATH_MAX];
-  if (self_path(binary, sizeof(binary)) != 0) {
-    fprintf(stderr, "await: --service needs /proc/self/exe (Linux with systemd)\n");
-    return 1;
-  }
 
   mkdir_p(replace("HOME", home, "HOME/.config/systemd/user"));
   fp = fopen(f, "w");
@@ -1250,12 +1228,97 @@ int service() {
 }
 #endif
 
+// NULL if s can go into the service file, else what is wrong with it: systemd
+// ignores unit file lines that are not UTF-8, and a plist (XML 1.0) also cannot
+// hold control characters other than tab, newline and carriage return
+static const char *service_text_problem(const char *s) {
+  const unsigned char *p = (const unsigned char *)s;
+  while (*p) {
+    unsigned c = *p;
+    if (c < 0x80) {
+#ifdef __APPLE__
+      if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return "a control character";
+#endif
+      p++;
+      continue;
+    }
+    int n;
+    unsigned cp;
+    if (c >= 0xC2 && c <= 0xDF) { n = 1; cp = c & 0x1F; }
+    else if (c >= 0xE0 && c <= 0xEF) { n = 2; cp = c & 0x0F; }
+    else if (c >= 0xF0 && c <= 0xF4) { n = 3; cp = c & 0x07; }
+    else return "invalid UTF-8";
+    for (int i = 1; i <= n; i++) {
+      if ((p[i] & 0xC0) != 0x80) return "invalid UTF-8"; // also stops at the terminating NUL
+      cp = (cp << 6) | (p[i] & 0x3F);
+    }
+    if ((n == 2 && cp < 0x800) || (n == 3 && (cp < 0x10000 || cp > 0x10FFFF))
+        || (cp >= 0xD800 && cp <= 0xDFFF))
+      return "invalid UTF-8";
+#ifdef __APPLE__
+    if (cp == 0xFFFE || cp == 0xFFFF) return "a non-character";
+#endif
+    p += n + 1;
+  }
+  return NULL;
+}
+
+#ifdef __APPLE__
+#define SERVICE_FILE "a launchd plist"
+#else
+#define SERVICE_FILE "a systemd unit"
+#endif
+
+static int service_text_ok(const char *what, const char *s) {
+  const char *problem = service_text_problem(s);
+  if (!problem) return 1;
+  fprintf(stderr, "await: --service: %s contains %s, which %s cannot hold; nothing was written\n",
+          what, problem, SERVICE_FILE);
+  return 0;
+}
+
 int service_main() {
   if (!valid_service_name(args.service)) {
     fprintf(stderr, "await: invalid --service name '%s': use only letters, digits, '.', '_' and '-'\n", args.service);
     return 2;
   }
-  return service();
+  const char *home;
+  if ((home = getenv("HOME")) == NULL)
+      home = getpwuid(getuid())->pw_dir;
+  char binary[PATH_MAX];
+  if (self_path(binary, sizeof(binary)) != 0) {
+    fprintf(stderr, "await: --service cannot find the path of this binary\n");
+    return 1;
+  }
+  // the service runs from here; falling back to / would break relative paths
+  char cwd[PATH_MAX];
+  struct stat named, here;
+  if (!getcwd(cwd, sizeof(cwd))) {
+    fprintf(stderr, "await: --service cannot use the current directory as the service's working directory: %s\n",
+            strerror(errno));
+    return 1;
+  }
+  // getcwd may still name a directory that was deleted (or replaced) since
+  if (stat(cwd, &named) != 0 || stat(".", &here) != 0
+      || named.st_dev != here.st_dev || named.st_ino != here.st_ino) {
+    fprintf(stderr, "await: --service cannot use the current directory as the service's working directory: "
+            "%s no longer exists\n", cwd);
+    return 1;
+  }
+
+  for (int i = 1; i < orig_argc; i++) {
+    char what[32];
+    snprintf(what, sizeof(what), "argument %d", i);
+    if (!service_text_ok(what, orig_argv[i])) return 2;
+  }
+  if (!service_text_ok("the current directory", cwd) || !service_text_ok("HOME", home)
+      || !service_text_ok("the path of this binary", binary))
+    return 2;
+#ifdef __APPLE__
+  const char *path = getenv("PATH");
+  if (path && !service_text_ok("PATH", path)) return 2;
+#endif
+  return service(home, binary, cwd);
 }
 
 void *shell(void * arg) {
