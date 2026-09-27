@@ -1293,6 +1293,129 @@ class TestSignalHandling:
                 proc.kill()
 
 
+class TestManPage:
+    """The man page is generated from --help by man/gen-man.sh (at build time)."""
+
+    GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'man', 'gen-man.sh')
+    AWAIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'await')
+
+    @staticmethod
+    def _gen(binary):
+        r = subprocess.run(['sh', TestManPage.GEN, binary], capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    @pytest.fixture(scope='class')
+    def page(self):
+        return self._gen(self.AWAIT)
+
+    @pytest.fixture(scope='class')
+    def page_file(self, page, tmp_path_factory):
+        path = tmp_path_factory.mktemp('man') / 'await.1'
+        path.write_text(page)
+        return str(path)
+
+    @staticmethod
+    def _help():
+        r = subprocess.run([TestManPage.AWAIT, '--help'], capture_output=True, text=True,
+                           env={**os.environ, 'NO_COLOR': '1'}, timeout=5)
+        return re.sub(r'\x1b\[[0-9;]*m', '', r.stdout)
+
+    @staticmethod
+    def _no_formatter():
+        # CI must check the page for real; locally a missing tool is only a skip
+        if os.environ.get('CI') == 'true':
+            pytest.fail('neither mandoc nor groff is installed (required in CI)')
+        pytest.skip('neither mandoc nor groff is installed')
+
+    @staticmethod
+    def _render(path):
+        """Render to plain text with mandoc or groff; None if neither is installed."""
+        for cmd in (['mandoc', '-Tutf8', '-O', 'width=200', path],
+                    ['groff', '-man', '-Tutf8', '-rLL=200n', path]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                                   env={**os.environ, 'GROFF_NO_SGR': '1'})
+            except FileNotFoundError:
+                continue
+            assert r.returncode == 0, r.stderr
+            return re.sub(r'.\x08', '', r.stdout)
+        return None
+
+    def test_every_help_option_is_documented(self, page):
+        help_opts = re.findall(r'^\s+(--[\w-]+(?:\s+-\w)?)\s*#', self._help(), re.M)
+        assert len(help_opts) > 10
+        # .TP tags: \fB\-\-stdout\fR, \fB\-o\fR
+        tags = re.findall(r'^\.TP\n(.*)$', page, re.M)
+        man_opts = {' '.join(re.findall(r'\\fB(.*?)\\fR', t)).replace('\\-', '-') for t in tags}
+        for opt in help_opts:
+            assert ' '.join(opt.split()) in man_opts, opt
+
+    def test_new_options_are_picked_up(self, tmp_path):
+        """Options are parsed from --help, not hardcoded."""
+        fake = tmp_path / 'await'
+        fake.write_text(
+            "#!/bin/sh\n"
+            "[ \"$1\" = --version ] && { echo 9.9.9; exit 0; }\n"
+            "printf 'await [options] commands\\n\\n# runs things\\n\\n\\nOPTIONS:\\n"
+            "  --help\\t\\t#print this help\\n  --brand-new -N\\t#a flag added later\\n\\n\\n"
+            "NOTES:\\n# set NO_COLOR=1 to disable colors\\n'\n")
+        fake.chmod(0o755)
+        page = self._gen(str(fake))
+        assert '\\fB\\-\\-brand\\-new\\fR, \\fB\\-N\\fR\nA flag added later.' in page
+        assert '"await 9.9.9"' in page
+
+    def test_lint_clean(self, page_file):
+        for cmd in (['mandoc', '-Tlint', '-W', 'warning', page_file],
+                    ['groff', '-man', '-Tutf8', '-ww', '-z', page_file]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            except FileNotFoundError:
+                continue
+            assert r.returncode == 0 and not (r.stdout + r.stderr).strip(), r.stdout + r.stderr
+            return
+        self._no_formatter()
+
+    def test_renders_name_and_examples(self, page_file):
+        text = self._render(page_file)
+        if text is None:
+            self._no_formatter()
+        assert re.search(r'^\s*await - runs list of commands', text, re.M)
+        # backslashes, quotes and hyphens survive as typed, so examples copy-paste
+        assert "await 'curl google.com' --fail" in text
+        assert "'expr \\1 + \\2' --exec 'echo \\3'" in text
+        for section in ('NAME', 'SYNOPSIS', 'DESCRIPTION', 'OPTIONS', 'ENVIRONMENT', 'EXAMPLES'):
+            assert re.search(rf'^{section}$', text, re.M), section
+
+    def test_no_ansi_and_troff_safe(self, page):
+        assert '\x1b' not in page
+        for line in page.splitlines():
+            assert not line.startswith("'"), line
+            if line.startswith('.'):
+                assert re.match(r'\.(\\"|(TH|SH|TP|PP|RS|RE|nf|fi|B|BR)( |$))', line), line
+
+    def test_environment(self, page):
+        env = page.split('.SH ENVIRONMENT', 1)[1].split('.SH ', 1)[0]
+        for var in ('NO_COLOR', 'AWAIT_NO_UPDATE_CHECK', 'AWAIT_AUTO_UPDATE'):
+            assert f'\\fB{var}\\fR' in env, var
+        for hidden in ('AWAIT_UPDATE_FORCE', 'AWAIT_RELEASES_URL', 'AWAIT_UPDATE_TARGET'):
+            assert hidden not in page
+
+    def test_version_matches(self, page):
+        version = subprocess.run([self.AWAIT, '--version'], capture_output=True, text=True).stdout.strip()
+        assert re.search(rf'^\.TH AWAIT 1 "[^"]*" "await {re.escape(version)}"', page, re.M)
+
+    def test_build_page_matches_binary(self):
+        """build/await.1 (made by cmake) is the same page the generator gives today."""
+        built = os.path.join(os.path.dirname(self.AWAIT), 'build', 'await.1')
+        binary = os.path.join(os.path.dirname(self.AWAIT), 'build', 'await')
+        if not (os.path.exists(built) and os.path.exists(binary)):
+            pytest.skip('no build/await.1')
+        strip_date = lambda s: re.sub(r'^(\.TH AWAIT 1) "[^"]*"', r'\1', s, flags=re.M)
+        with open(built) as f:
+            assert strip_date(f.read()) == strip_date(self._gen(binary))
+
+
 class TestAutocompletion:
     """Test autocompletion script generation."""
 
@@ -1763,9 +1886,10 @@ class FakeReleases:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/releases"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True):
+    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True, extra_files=None):
         """Publish `version` with an archive for `target` whose `await` is a stand-in
-        that answers --version (or `binary`, a shell script)."""
+        that answers --version (or `binary`, a shell script), plus `extra_files`
+        ({name: text}) next to it."""
         import hashlib, io, tarfile
         self.latest = version
         script = binary or f"#!/bin/sh\necho {version}\n"
@@ -1774,6 +1898,10 @@ class FakeReleases:
             info = tarfile.TarInfo("await")
             info.size, info.mode = len(script), 0o644   # like the old archives: not executable
             tar.addfile(info, io.BytesIO(script.encode()))
+            for name, text in (extra_files or {}).items():
+                info = tarfile.TarInfo(name)
+                info.size, info.mode = len(text.encode()), 0o644
+                tar.addfile(info, io.BytesIO(text.encode()))
         archive = f"await-{version}-{target}.tar.gz"
         self.files[f"/releases/download/{version}/{archive}"] = buf.getvalue()
         if sums:
@@ -1986,6 +2114,55 @@ class TestSelfUpdate:
         returncode, err = self.update()
         assert returncode == 0, err
         assert running.wait(timeout=10) == 0
+
+    def man_page(self, text=None):
+        """<prefix>/share/man/man1/await.1 next to <prefix>/bin/await; `text` creates it."""
+        path = os.path.join(self.dir, "share", "man", "man1", "await.1")
+        if text is not None:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        return path
+
+    def test_installed_man_page_is_refreshed(self):
+        page = self.man_page(".TH AWAIT 1 old\n")
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert open(page).read() == ".TH AWAIT 1 new\n"
+        assert os.listdir(os.path.dirname(page)) == ["await.1"]       # no temp file left behind
+
+    def test_man_page_is_not_created(self):
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert not os.path.exists(os.path.join(self.dir, "share"))
+
+    def test_man_page_symlink_is_not_written_through(self):
+        target = os.path.join(self.dir, "elsewhere.1")
+        with open(target, "w") as f:
+            f.write("mine\n")
+        page = self.man_page()
+        os.makedirs(os.path.dirname(page))
+        os.symlink(target, page)
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert os.path.islink(page) and open(target).read() == "mine\n"
+
+    def test_read_only_man_page_does_not_fail_the_update(self):
+        if os.geteuid() == 0:
+            pytest.skip("root can write anywhere")
+        page = self.man_page(".TH AWAIT 1 old\n")
+        os.chmod(page, 0o444)
+        os.chmod(os.path.dirname(page), 0o555)
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert "couldn't update the man page" in err
+        assert open(page).read() == ".TH AWAIT 1 old\n"
 
     def test_already_up_to_date(self):
         self.releases.publish(self.version)

@@ -80,6 +80,7 @@ jobs:
         cp build/await.fish ${{ matrix.os }}/
         cp build/await.bash ${{ matrix.os }}/
         cp build/await.zsh ${{ matrix.os }}/
+        cp build/await.1 ${{ matrix.os }}/
         # Copy binary to project root for tests
         cp build/await ./await
 
@@ -93,6 +94,7 @@ jobs:
         cp build-arm64/await.fish macos-latest-arm64/
         cp build-arm64/await.bash macos-latest-arm64/
         cp build-arm64/await.zsh macos-latest-arm64/
+        cp build-arm64/await.1 macos-latest-arm64/
 
     - name: Build on macOS (x86_64)
       if: matrix.os == 'macos-latest'
@@ -104,6 +106,7 @@ jobs:
         cp build-x86_64/await.fish macos-latest-x86_64/
         cp build-x86_64/await.bash macos-latest-x86_64/
         cp build-x86_64/await.zsh macos-latest-x86_64/
+        cp build-x86_64/await.1 macos-latest-x86_64/
         # Test the build native to this runner (arm64 on Apple Silicon), not one run under Rosetta
         cp build-$(uname -m)/await ./await
 
@@ -172,7 +175,7 @@ jobs:
         cmake --build build-static/
         file build-static/await | grep -q 'statically linked'
         mkdir -p linux-musl-${{ matrix.arch }}
-        cp build-static/await build-static/await.fish build-static/await.bash build-static/await.zsh linux-musl-${{ matrix.arch }}/
+        cp build-static/await build-static/await.fish build-static/await.bash build-static/await.zsh build-static/await.1 linux-musl-${{ matrix.arch }}/
         cp build-static/await ./await
 
     - name: Run tests

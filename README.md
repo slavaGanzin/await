@@ -22,6 +22,13 @@ yay -S await
 
 # not recommended, but it works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash
+
+# man page for `man await`: await.1 ships in every release archive
+# (https://github.com/slavaGanzin/await/releases), next to the binary
+tar -xzf await-*.tar.gz await.1
+sudo mkdir -p /usr/local/share/man/man1 && sudo install -m644 await.1 /usr/local/share/man/man1/
+# or, building from source (installs binary, man page and completions)
+cmake -B build && cmake --build build && sudo cmake --install build
 ```
 
 ### update

@@ -1767,6 +1767,13 @@ int run_update(void) {
     "{ [ ! -e \"$self.old\" ] && [ ! -L \"$self.old\" ] && mv -f \"$tmp/old\" \"$self.old\"; }"
     " || { say \"couldn't keep a backup at $self.old; not updating\"; exit 11; }\n"
     "mv -f \"$tmp/x/await\" \"$self\" || { say \"couldn't replace $self\"; exit 11; }\n"
+    // refresh an installed man page (never create one, never write through a
+    // symlink); a failure here is only a note, the update has already succeeded
+    "m=$dir/../share/man/man1/await.1 mt=\n"
+    "if [ -f \"$tmp/x/await.1\" ] && [ -f \"$m\" ] && [ ! -L \"$m\" ]; then\n"
+    "  { [ -w \"$m\" ] && mt=$(mktemp \"${m%/*}/.await.1.XXXXXX\") && cp \"$tmp/x/await.1\" \"$mt\" && chmod 644 \"$mt\" && mv -f \"$mt\" \"$m\"; } 2>/dev/null"
+    " || { [ -z \"$mt\" ] || rm -f \"$mt\"; say \"note: couldn't update the man page $m\"; }\n"
+    "fi\n"
     "say \"updated $cur -> $new ($self; the previous version is kept at $self.old)\"\n";
   fflush(stdout);
   fflush(stderr);
