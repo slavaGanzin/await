@@ -119,8 +119,8 @@ function render_options(sec,    i, l, p, flags, desc, n, f, k, tag) {
   }
 }
 
-# NOTES: groups of "# ..." lines (a line starting with "and"/"or" continues
-# the previous one). Groups that set environment variables (NAME=value) go
+# NOTES: groups of "# ..." lines (a line continues the previous one when it
+# starts with "and", "or" or "(", or the previous one ends with "," or ";"). Groups that set environment variables (NAME=value) go
 # to ENVIRONMENT, the rest (and indented examples) to DESCRIPTION.
 function split_notes(sec,    i, l, t, g, s, v) {
   ng = 0
@@ -128,7 +128,8 @@ function split_notes(sec,    i, l, t, g, s, v) {
     l = lines[sec, i]
     if (l ~ /^#/) {
       t = trim(substr(l, 2))
-      if (ng > 0 && gkind[ng] == "text" && t ~ /^(and|or)[ \t]/) gtext[ng] = gtext[ng] " " t
+      if (ng > 0 && gkind[ng] == "text" && (t ~ /^(and|or)[ \t]/ || t ~ /^\(/ || gtext[ng] ~ /[,;]$/))
+        gtext[ng] = gtext[ng] " " t
       else { ng++; gkind[ng] = "text"; gtext[ng] = t }
     } else if (trim(l) != "") {
       if (ng == 0 || gkind[ng] != "example") { ng++; gkind[ng] = "example"; gtext[ng] = "" }

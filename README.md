@@ -320,7 +320,7 @@ NOTES:
   await 'echo 10' 'date +%S' 'expr \1 + \2' --exec 'echo \3' --forever --silent
 # with --times and --forever, --exec runs once each time a streak reaches N, not on every check after
 # (--change --times N: at every Nth change in a row)
-# with --expect, --times and --backoff count matches as successful checks (non-matches with --fail);
+# under --expect, --times and --backoff take a match as a successful check (a non-match with --fail);
 # a run killed by --cmd-timeout is neither, so it starts a --times streak over
 # --backoff spaces out the runs of each command (--retry still counts runs); --timeout still ends the wait on time
 # set NO_COLOR=1 to disable colors

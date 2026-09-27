@@ -3595,6 +3595,21 @@ class TestFeatureInteractions:
         assert r.returncode == 1
         assert re.fullmatch(r"timed out after 1\.\ds: sleep 3; echo UP exited 124 \(--cmd-timeout\)", body), body
 
+    # the man page (generated from --help) keeps multi-line NOTES together
+
+    def test_man_page_joins_wrapped_notes(self):
+        gen = os.path.join(os.path.dirname(self.SRC), "man", "gen-man.sh")
+        r = subprocess.run(["sh", gen, self.AWAIT], capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, r.stderr
+        desc = r.stdout[r.stdout.index(".SH DESCRIPTION"):r.stdout.index(".SH OPTIONS")]
+        # a line of a wrapped note that became its own paragraph ends in ",." or ";."
+        assert not re.search(r"[,;]\.$", desc, re.M), desc
+        paragraphs = desc.split(".PP\n")
+        para = next(p for p in paragraphs if "notify" in p and "tries, in order" in p)
+        assert "PowerShell toast" in para and "terminal bell" in para
+        para = next(p for p in paragraphs if "\\-\\-times and \\-\\-forever" in p)
+        assert "every Nth change" in para
+
     # --service replays every flag, and getopt values never collide
 
     @staticmethod
