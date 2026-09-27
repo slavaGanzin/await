@@ -17,7 +17,7 @@ bash hooks/pre-commit
 cmake -B build/ && cmake --build build/
 ```
 
-Binary lands at `build/await`. Tests expect `./await` in the project root — copy it after building:
+Binary lands at `build/await`. The default build type is `MinSizeRel`, stripped (what releases ship); add `-DCMAKE_BUILD_TYPE=Debug` for symbols, e.g. for sanitizer builds. Tests expect `./await` in the project root — copy it after building:
 ```bash
 cp build/await ./await
 ```
