@@ -2,7 +2,24 @@ cmake_minimum_required(VERSION 3.28)
 
 project(await)
 
+# Release builds by default: optimised for size and without symbols, so the
+# binary CI tests is the one that ships. Pass -DCMAKE_BUILD_TYPE=Debug (e.g.
+# for sanitizer builds) to keep symbols.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "Build type" FORCE)
+endif()
+
 add_executable(await await.c)
+
+if(CMAKE_BUILD_TYPE MATCHES "^(MinSizeRel|Release)$")
+  if(APPLE)
+    # strip at link time: a later `strip` would invalidate the linker's
+    # ad-hoc code signature on Apple Silicon
+    target_link_options(await PRIVATE -Wl,-S -Wl,-x)
+  else()
+    target_link_options(await PRIVATE -s)
+  endif()
+endif()
 
 # Generate autocompletion files
 add_custom_command(

@@ -6,6 +6,7 @@
 
 ### Changes
 
+- Release binaries are size-optimised and stripped (they used to ship with debug info): ~60KB on macOS and glibc Linux, ~140KB for the static Linux builds, down from 72–250KB.
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
 
 ---
