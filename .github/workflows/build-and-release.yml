@@ -486,7 +486,7 @@ jobs:
           fi
           git add Formula/await.rb
           git commit -q -m "Update Homebrew formula for $VERSION [skip ci]"
-          git push -q origin HEAD:main && exit 0
+          git push -q origin HEAD:refs/heads/main && exit 0
           sleep $((attempt * 5))
         done
         echo "could not push the formula update to main" >&2
