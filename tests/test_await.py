@@ -3542,21 +3542,27 @@ class TestFeatureInteractions:
     def test_backoff_resets_on_expect_match(self, pattern):
         """Misses back off; a match (exit 1 here) is a successful check and resets the pause."""
         cmd = pattern("down,down,down,down,up")
-        r = self.run(["-V", "-i", "0.1", "--backoff", "0.8", "--expect", "^UP", "--forever", "-T", "4", cmd])
+        r = self.run(["-V", "-i", "0.1", "--backoff", "2", "--expect", "^UP", "--forever", "-T", "6", cmd],
+                     timeout=15)
         assert r.returncode == 1  # --forever ends at -T
         runs = pattern.runs()
         assert runs[:4] == ["down"] * 4
         # the misses take ~1.5s of pauses (0.1+0.2+0.4+0.8); the matches are then
-        # 0.1s apart for the remaining ~2.5s. Backing off on them (0.8s) would
-        # leave room for about 3.
+        # 0.1s apart (plus the run itself, ~0.25s on a slow runner) for the
+        # remaining ~4.5s: 12 or more. Backing off on them (1.6s, then 2s apart)
+        # would leave room for about 4, however fast the machine.
         assert runs.count("up") >= 8, runs
 
     def test_backoff_fail_expect_counts_non_matches_as_success(self, pattern):
         """--fail --expect: a non-match is what we wait for, so it keeps the interval."""
         cmd = pattern("down")
-        r = self.run(["-V", "-i", "0.1", "--backoff", "2", "--fail", "--expect", "^UP", "--forever", "-T", "2", cmd])
+        r = self.run(["-V", "-i", "0.1", "--backoff", "4", "--fail", "--expect", "^UP", "--forever", "-T", "5", cmd],
+                     timeout=15)
         assert r.returncode == 1
-        assert len(pattern.runs()) >= 8, pattern.runs()
+        # 0.1s apart (plus the run itself, ~0.25s on a slow runner) for 5s: 14 or
+        # more. Backing off would pause 0.1, 0.2, 0.4, 0.8, 1.6, then 3.2 cut to
+        # the deadline: about 7 runs, however fast the machine.
+        assert len(pattern.runs()) >= 10, pattern.runs()
 
     # --notify + --expect/--times
 
