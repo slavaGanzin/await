@@ -1476,6 +1476,21 @@ class TestAutocompletion:
         assert complete("await", "--retry", "") == []          # a number, not a filename
         assert "--lap" in complete("await", "--json", "--")    # flags after flags
 
+    def test_zsh_completion_specs(self):
+        """One well-formed _arguments spec per option, in a script zsh parses."""
+        script = subprocess.run(["../await", "--autocomplete-zsh"], capture_output=True, text=True).stdout
+        specs = re.findall(r"^    '(.*)'(?: \\)?$", script, re.M)
+        names = [re.match(r"--([a-z-]+)", spec).group(1) for spec in specs]
+        assert len(names) == len(set(names)) and "exec" in names, names
+        for spec in specs:
+            # --name[description], then :message: for a value or :message:action for --exec
+            assert re.fullmatch(r"--[a-z-]+\[[^'\[\]]+\](:[a-z -]+:(_command_names)?)?", spec), spec
+        assert "'--exec[" in script and ":command:_command_names'" in script
+        assert re.search(r"'--retry\[[^]]*\]:retry:'", script)
+        if __import__("shutil").which("zsh"):
+            check = subprocess.run(["zsh", "-n"], input=script, capture_output=True, text=True)
+            assert check.returncode == 0, check.stderr
+
     @pytest.mark.skipif(not __import__("shutil").which("fish"), reason="fish not installed")
     def test_fish_completion_after_a_flag(self):
         script = subprocess.run(["../await", "--autocomplete-fish"], capture_output=True, text=True).stdout
