@@ -49,13 +49,18 @@ curl -fsSL --retry 3 -o "$dir/release.tar.gz" "$url" && tar -xzf "$dir/release.t
   || fail "couldn't fetch $url to compare"
 rel=$dir/release/await; [ -f "$rel.exe" ] && rel=$rel.exe
 cmp -s "$rel" "$a" || fail "installed await isn't the one in $url"
-cmp -s "$bin" "$a.old" || fail "backup isn't the build we started from"
+# the backup is where the updater says it put it (on MSYS2 that path drops
+# the .exe of the running binary, and the file on disk may gain one back)
+backup=$(printf '%s\n' "$log" | sed -n 's/.*the previous version is kept at \(.*\))$/\1/p')
+[ -n "$backup" ] || fail "--update didn't say where it kept the previous version"
+[ ! -f "$backup" ] && [ -f "$backup.exe" ] && backup=$backup.exe
+cmp -s "$bin" "$backup" || fail "backup ($backup) isn't the build we started from"
 [ -x "$a" ] || fail "installed await isn't executable"
 rm -rf "$dir/release" "$dir/release.tar.gz"
 
 got=$("$a" --version)
 [ "$got" = "$latest" ] || fail "installed await reports '$got', expected $latest"
-old=$("$a.old" --version)
+old=$("$backup" --version)
 [ "$old" = "$built" ] || fail "backup reports '$old', expected $built"
 out=$("$a" 'echo ok' --stdout --silent)
 [ "$out" = ok ] || fail "installed await doesn't run commands (got '$out')"
