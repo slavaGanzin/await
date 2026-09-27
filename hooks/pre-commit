@@ -117,6 +117,16 @@ await \"curl 'https://whatnot.ai' &>/dev/null && echo UP || echo DOWN\" \\
 <img src='demo/2.gif' width='100%'></img>
 
 
+### Get notified when it's done
+\`\`\`bash
+# switch to something else and get a desktop notification when the deploy is up (or gives up)
+await 'curl -sf https://myapp.com/healthz' 'kubectl rollout status deploy/myapp' --timeout 600 --notify
+# or when CI turns green, even over SSH
+await 'gh run view --exit-status' --interval 30 --notify
+\`\`\`
+\`--notify\` reports the outcome (\`done in 4m 12s: 2/2 commands succeeded\`, \`timed out after 10m: 1/2 commands succeeded; ...\`), and with \`--forever\` every \`--exec\` run. It uses your terminal's own notifications when it supports them (iTerm2, WezTerm, ghostty, kitty, foot, Windows Terminal, VS Code), so it works over SSH and inside tmux too; otherwise \`notify-send\`/\`gdbus\`/\`kdialog\` on Linux, \`terminal-notifier\`/\`osascript\` on macOS, a toast on Windows, or at least a terminal bell.
+
+
 ### Use as [concurrently](https://github.com/kimmobrunfeldt/concurrently)
 \`\`\`bash
 await \"stylus --watch --compress --out /home/vganzin/work/whatnot/front /home/vganzin/work/whatnot/front/index.styl\" \\
