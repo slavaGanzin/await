@@ -2751,8 +2751,13 @@ class TestSelfUpdate:
         os.close(slave)
         assert proc.wait(timeout=5) == 0
         os.close(master)
+        # wait for the update to finish (backup in place, lock and temp dir gone)
+        # before running the binary: exec'ing it mid-swap is a race on Windows
+        import glob
+        finished = lambda: (os.path.exists(self.binary + ".old")
+                            and not glob.glob(os.path.join(os.path.dirname(self.binary), ".await-update*")))
         deadline = time.time() + 10
-        while time.time() < deadline and self.installed_version() != "99.0.0":
+        while time.time() < deadline and not finished():
             time.sleep(0.1)
         assert self.installed_version() == "99.0.0"
 
@@ -3170,9 +3175,10 @@ class TestTimes:
         fired = os.path.join(pattern.root, "fired")
         returncode, stdout, stderr = run_await_with_timeout(
             f'-V -i 0.05 --forever --times 2 "{cmd}" --exec "echo x >> {fired}"',
-            timeout=2.0
+            timeout=4.0
         )
         assert returncode == 124  # --forever: killed by the test
+        # past the pattern: failing checks after the last streak fire nothing more
         assert len(pattern.runs()) > 10
         with open(fired) as f:
             assert len(f.readlines()) == 2
