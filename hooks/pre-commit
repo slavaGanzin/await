@@ -186,6 +186,15 @@ await 'curl -sf localhost:8080/health' --times 3 --interval 1
 await 'curl -sf https://myapp.com' --fail --times 5 --forever --exec 'ntfy send \"site is down\"'
 \`\`\`
 
+### Back off while something is down
+\`\`\`bash
+# Checks 0.2s, 0.4s, 0.8s ... apart (+-10% jitter), never more than 60s; a success resets the pace
+await 'curl -sf https://api.example.com' --backoff 60
+
+# --timeout still ends the wait on time, however long the current pause
+await 'pg_isready -h db' --interval 1 --backoff 30 --timeout 300
+\`\`\`
+
 ## --help
 \`\`\`bash
 $(./build/await --help | sed 's/\x1b\[[0-9;]*m//g')

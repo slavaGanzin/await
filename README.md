@@ -180,6 +180,15 @@ await 'curl -sf localhost:8080/health' --times 3 --interval 1
 await 'curl -sf https://myapp.com' --fail --times 5 --forever --exec 'ntfy send "site is down"'
 ```
 
+### Back off while something is down
+```bash
+# Checks 0.2s, 0.4s, 0.8s ... apart (+-10% jitter), never more than 60s; a success resets the pace
+await 'curl -sf https://api.example.com' --backoff 60
+
+# --timeout still ends the wait on time, however long the current pause
+await 'pg_isready -h db' --interval 1 --backoff 30 --timeout 300
+```
+
 ## --help
 ```bash
 await [options] commands
@@ -235,6 +244,9 @@ EXAMPLES:
 # don't trust a flapping service: wait for 3 healthy checks in a row
   await 'curl -sf localhost:8080/health' --times 3 --interval 1
 
+# poll a flaky API politely: 0.2s, 0.4s, 0.8s ... up to a minute between failed checks
+  await 'curl -sf https://api.example.com' --backoff 60
+
 # get pinged the moment your site goes down
   await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"'
 
@@ -264,6 +276,7 @@ OPTIONS:
   --lap -l		#show last run duration per command in spinner
   --expect -x		#succeed when stdout matches this POSIX extended regex (^ and $ match at each line; exit status is ignored)
   --times		#a command is done only after N successful checks in a row (failures with --fail); a miss starts over [default: 1]
+  --backoff		#after each failed check double the command's interval (±10% jitter), up to MAX seconds; a success resets it
   --service -S		#create systemd user service with same parameters and activate it
   --version -v		#print the version of await
   --update		#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)
@@ -281,6 +294,7 @@ NOTES:
   await 'echo 10' 'date +%S' 'expr \1 + \2' --exec 'echo \3' --forever --silent
 # with --times and --forever, --exec runs once each time a streak reaches N, not on every check after
 # (--change --times N: at every Nth change in a row)
+# --backoff spaces out the runs of each command (--retry still counts runs); --timeout still ends the wait on time
 # set NO_COLOR=1 to disable colors
 # in an interactive terminal, await checks for a newer release in the background (at most daily)
 # and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off,

@@ -17,6 +17,7 @@
 #include <sys/resource.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <spawn.h>
 #include <poll.h>
 #include <sys/utsname.h>
@@ -91,10 +92,12 @@ typedef struct {
   char *expect;     // --expect: success is stdout matching this regex
   regex_t expect_re;
   int times;  // --times N: successes in a row a command needs (0: not given, i.e. 1)
+  int backoff;  // --backoff MAX in ms: cap of the growing pause after failed checks (0: off)
 } ARGS;
 
-// long options without a short letter
-enum { OPT_TIMES = 256 };
+// long options without a short letter: one enum, so their getopt values
+// never collide (--service replays options by looking them up by value)
+enum { OPT_TIMES = 256, OPT_BACKOFF };
 
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0, .cmd_timeout=0, .retry=0};
 
@@ -161,6 +164,7 @@ void print_autocomplete_fish() {
          "complete -c await -l lap -s l -d 'Show last run duration per command in spinner'\n"
          "complete -c await -l expect -s x -d 'Succeed when stdout matches this extended regex (exit status ignored)' -r\n"
          "complete -c await -l times -d 'Consecutive successful checks needed [default: 1]' -r\n"
+         "complete -c await -l backoff -d 'Double the interval after each failed check, up to MAX seconds' -r\n"
          "complete -c await -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
          "complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
          "complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
@@ -176,14 +180,14 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --expect --times --update\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --expect --times --backoff --update\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --exec)\n"
          "            COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
-         "        --status|--interval|--timeout|--cmd-timeout|--retry|--times|--name|--service|--expect)\n"
+         "        --status|--interval|--timeout|--cmd-timeout|--retry|--times|--backoff|--name|--service|--expect)\n"
          "            return 0\n"
          "            ;;\n"
          "    esac\n"
@@ -230,6 +234,7 @@ void print_autocomplete_zsh() {
          "    '--lap[Show last run duration per command in spinner]' \\\n"
          "    '--expect[Succeed when stdout matches this extended regex (exit status ignored)]:regex:' \\\n"
          "    '--times[Consecutive successful checks needed (default: 1)]:times:' \\\n"
+         "    '--backoff[Double the interval after each failed check, up to MAX seconds]:max seconds:' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]:service name:'\n"
          "}\n"
@@ -770,6 +775,8 @@ void help() {
   "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
   "# don't trust a flapping service: wait for 3 healthy checks in a row\n"
   "  await 'curl -sf localhost:8080/health' --times 3 --interval 1\n\n"
+  "# poll a flaky API politely: 0.2s, 0.4s, 0.8s ... up to a minute between failed checks\n"
+  "  await 'curl -sf https://api.example.com' --backoff 60\n\n"
   "# get pinged the moment your site goes down\n"
   "  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send \"site is down\"'\n\n"
   "# ...as a systemd daemon that survives reboots\n"
@@ -796,6 +803,7 @@ void help() {
   "  --lap -l\t\t#show last run duration per command in spinner\n"
   "  --expect -x\t\t#succeed when stdout matches this POSIX extended regex (^ and $ match at each line; exit status is ignored)\n"
   "  --times\t\t#a command is done only after N successful checks in a row (failures with --fail); a miss starts over [default: 1]\n"
+  "  --backoff\t\t#after each failed check double the command's interval (±10% jitter), up to MAX seconds; a success resets it\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
   "  --update\t\t#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)\n"
@@ -812,6 +820,7 @@ void help() {
   "  await 'echo 10' 'date +%S' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
   "# with --times and --forever, --exec runs once each time a streak reaches N, not on every check after\n"
   "# (--change --times N: at every Nth change in a row)\n"
+  "# --backoff spaces out the runs of each command (--retry still counts runs); --timeout still ends the wait on time\n"
   "# set NO_COLOR=1 to disable colors\n"
   "# in an interactive terminal, await checks for a newer release in the background (at most daily)\n"
   "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off,\n"
@@ -912,6 +921,7 @@ void parse_args(int argc, char *argv[]) {
             {"lap",   no_argument,       0, 'l'},
             {"expect", required_argument, 0, 'x'},
             {"times", required_argument, 0, OPT_TIMES},
+            {"backoff", required_argument, 0, OPT_BACKOFF},
             {"update", no_argument, 0, 0},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
@@ -1016,6 +1026,16 @@ void parse_args(int argc, char *argv[]) {
             args.times = (int)n;
             break;
           }
+          case OPT_BACKOFF: {
+            char *end;
+            double max = strtod(optarg, &end);
+            if (end == optarg || *end || !(max >= 0.001) || max > INT_MAX / 1000) {
+              fprintf(stderr, "await: --backoff needs a positive number of seconds, got '%s'\n", optarg);
+              exit(2);
+            }
+            args.backoff = (int)(max * 1000);
+            break;
+          }
         }
       }
 
@@ -1029,6 +1049,13 @@ void parse_args(int argc, char *argv[]) {
       }
       // a run's status is 0 when its stdout matches, so that is what we wait for
       args.expectedStatus = 0;
+    }
+
+    // checked once all options are in: --interval may come after --backoff
+    if (args.backoff && args.backoff < args.interval) {
+      fprintf(stderr, "await: --backoff (%gs) must be at least --interval (%gs)\n",
+              args.backoff / 1000.0, args.interval / 1000.0);
+      exit(2);
     }
 
     if (!args.exec && args.daemonize)
@@ -1120,6 +1147,37 @@ int expect_matches(const char *out, size_t len) {
   return 0;
 }
 
+static unsigned xorshift32(unsigned *state) {
+  unsigned x = *state;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  return *state = x;
+}
+
+// --backoff: the pause before a command's next check. *wait is the pause the
+// next failed check gets: --interval after a success, doubling with each
+// failure in a row, up to MAX. Failed checks' pauses get +-10% jitter, so
+// commands backing off together don't stay in lockstep, and never pass MAX
+// nor the --timeout deadline (no point sleeping past the end). Once the
+// deadline has passed (await is about to give up), pauses are left alone
+// rather than cut to nothing, so the command isn't rerun back to back.
+long backoff_pause(long *wait, int ok, unsigned *rng) {
+  if (ok) {
+    *wait = args.interval;
+    return args.interval;
+  }
+  long base = *wait;
+  *wait = base <= 0 ? 1 : base > args.backoff / 2 ? args.backoff : base * 2;
+  long pause = base + base * ((long)(xorshift32(rng) % 2001) - 1000) / 10000;
+  if (pause > args.backoff) pause = args.backoff;
+  if (args.timeout > 0) {
+    long left = args.start_time + args.timeout - current_time_ms();
+    if (left > 0 && pause > left) pause = left;
+  }
+  return pause;
+}
+
 void *shell(void * arg) {
   COMMAND *c = (COMMAND*)arg;
   pthread_mutex_lock(&c->lock);
@@ -1133,6 +1191,11 @@ void *shell(void * arg) {
 
   char buf[BUF_SIZE];
   int run_status = -1;
+  // --backoff state; the jitter's generator is this thread's own
+  long backoff_wait = args.interval;
+  unsigned rng = (unsigned)time(NULL) ^ ((unsigned)getpid() << 16) ^ (unsigned)((uintptr_t)arg * 2654435761u);
+  if (!rng) rng = 1;
+  xorshift32(&rng);
   wait_for_dependencies(c);
   while (1) {
     pthread_mutex_lock(&c->lock);
@@ -1279,7 +1342,14 @@ void *shell(void * arg) {
     }
     // with --retry N a command runs at most N times
     if (args.retry > 0 && c->runs >= args.retry) break;
-    msleep(args.interval);
+    if (args.backoff) {
+      // a successful check is what await waits for (--fail: a failure, --change:
+      // a change, --expect: a match), the same test --times counts streaks with
+      int ok = check_ok(run_status, counted_change);
+      msleep(backoff_pause(&backoff_wait, ok, &rng));
+    } else {
+      msleep(args.interval);
+    }
   }
   return NULL;
 }
@@ -1582,6 +1652,8 @@ int main(int argc, char *argv[]) {
   FILE *fp;
 
   atexit(stop_running_commands);
+  // Start time for --timeout and --json elapsed_ms (and --backoff, in the commands' threads)
+  args.start_time = current_time_ms();
   for(int i = 0; i <= args.nCommands; i++) {
     c[i].status = -1;
     pthread_mutex_init(&c[i].lock, NULL);
@@ -1601,9 +1673,6 @@ int main(int argc, char *argv[]) {
   static int first_output = 1;
   static char *last_display = NULL;
   static char *last_silent_output = NULL;
-
-  // Start time for --timeout and --json elapsed_ms
-  args.start_time = current_time_ms();
 
   while (1) {
     not_done = 0;
