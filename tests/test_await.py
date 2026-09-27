@@ -1571,9 +1571,9 @@ class TestNoColor:
 
 
 # the native notifiers --notify tries, in order, on this platform
-NOTIFY_PLATFORM = platform.system()
-NATIVE_NOTIFIERS = (["terminal-notifier", "osascript"] if NOTIFY_PLATFORM == "Darwin"
-                    else ["notify-send", "gdbus", "kdialog"])
+NOTIFY_PLATFORM = "Windows" if platform.system().startswith(("MSYS", "MINGW", "CYGWIN")) else platform.system()
+NATIVE_NOTIFIERS = {"Darwin": ["terminal-notifier", "osascript"],
+                    "Windows": ["powershell.exe"]}.get(NOTIFY_PLATFORM, ["notify-send", "gdbus", "kdialog"])
 linux_only = pytest.mark.skipif(NOTIFY_PLATFORM != "Linux", reason="Linux notifiers")
 macos_only = pytest.mark.skipif(NOTIFY_PLATFORM != "Darwin", reason="macOS notifiers")
 
@@ -1581,13 +1581,16 @@ macos_only = pytest.mark.skipif(NOTIFY_PLATFORM != "Darwin", reason="macOS notif
 class TestNotify:
     """--notify: terminal escape sequences, native notifiers, bell."""
 
-    STUBS = ("notify-send", "gdbus", "kdialog", "osascript", "terminal-notifier")
-    # stubs log their argv as one JSON line; STUB_EXIT_<name> / STUB_SLEEP_<name> steer them
+    STUBS = ("notify-send", "gdbus", "kdialog", "osascript", "terminal-notifier", "powershell.exe")
+    # stubs log their argv as one JSON line (powershell.exe: then the title and body,
+    # which await passes it in the environment); STUB_EXIT_<name> / STUB_SLEEP_<name> steer them
     STUB = """#!/usr/bin/env python3
 import json, os, sys, time
-name = os.path.basename(sys.argv[0]).replace("-", "_")
+base = os.path.basename(sys.argv[0])
+name = base.replace("-", "_").replace(".", "_")
+extra = [os.environ.get("AWAIT_NOTIFY_TITLE", ""), os.environ.get("AWAIT_NOTIFY_BODY", "")] if base == "powershell.exe" else []
 with open(os.environ["NOTIFY_LOG"], "a") as f:
-    f.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\\n")
+    f.write(json.dumps([base] + sys.argv[1:] + extra) + "\\n")
 time.sleep(float(os.environ.get("STUB_SLEEP_" + name, "0")))
 sys.exit(int(os.environ.get("STUB_EXIT_" + name, "0")))
 """
@@ -1636,11 +1639,13 @@ sys.exit(int(os.environ.get("STUB_EXIT_" + name, "0")))
             return tuple(json.loads(a) for a in call[12:14])
         if name == "kdialog":
             return call[2], call[4]
+        if name == "powershell.exe":
+            return call[-2], call[-1]
         return call[3], call[4]  # notify-send
 
     @staticmethod
     def stub_env(what, names, value):
-        return {f"STUB_{what}_" + n.replace("-", "_"): value for n in names}
+        return {f"STUB_{what}_" + n.replace("-", "_").replace(".", "_"): value for n in names}
 
     def only_call(self, result, name=None):
         """the one notifier call, the platform's first choice unless named; its (title, body)"""
@@ -1822,9 +1827,10 @@ sys.exit(int(os.environ.get("STUB_EXIT_" + name, "0")))
         body = self.text(r.calls[0])[1]
         self.assert_clean(body)
         assert body.startswith("gave up after 1 attempts: 1/2 commands succeeded; exit 1 exited 1")
-        # the fallback gets the same text (gdbus: as a GVariant literal)
-        assert self.text(r.calls[1])[1] == body
-        if r.calls[1][0] == "gdbus":
+        # the fallback, where there is one, gets the same text (gdbus: as a GVariant literal)
+        if len(r.calls) > 1:
+            assert self.text(r.calls[1])[1] == body
+        if len(r.calls) > 1 and r.calls[1][0] == "gdbus":
             assert r.calls[1][13] == '"' + body + '"'
         r = notify([b"--notify", b"-V", cmd])
         body = self.text(r.calls[-1])[1]
@@ -1856,6 +1862,7 @@ sys.exit(int(os.environ.get("STUB_EXIT_" + name, "0")))
         count = len(runs.read_text().splitlines())
         assert count >= 2 and len(execs) in (count, count - 1), (count, bodies)
 
+    @pytest.mark.skipif(NOTIFY_PLATFORM == "Windows", reason="MSYS ptys don't support tcflow")
     def test_stopped_terminal_does_not_delay_exit(self, notify):
         import pty, fcntl, termios
         master, slave = pty.openpty()
@@ -2582,6 +2589,8 @@ class TestSelfUpdate:
         page = self.man_page()
         os.makedirs(os.path.dirname(page))
         os.symlink(target, page)
+        if not os.path.islink(page):
+            pytest.skip("no real symlinks here (MSYS copies the target by default)")
         self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
         returncode, err = self.update()
         assert returncode == 0, err
