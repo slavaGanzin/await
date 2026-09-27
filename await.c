@@ -165,7 +165,7 @@ void print_autocomplete_fish() {
          "complete -c await -l expect -s x -d 'Succeed when stdout matches this extended regex (exit status ignored)' -r\n"
          "complete -c await -l times -d 'Consecutive successful checks needed [default: 1]' -r\n"
          "complete -c await -l backoff -d 'Double the interval after each failed check, up to MAX seconds' -r\n"
-         "complete -c await -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
+         "complete -c await -l service -s S -d 'Create systemd user service (Linux) or launchd agent (macOS) with same parameters and activate it'\n"
          "complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
          "complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
          "\n"
@@ -236,7 +236,7 @@ void print_autocomplete_zsh() {
          "    '--times[Consecutive successful checks needed (default: 1)]:times:' \\\n"
          "    '--backoff[Double the interval after each failed check, up to MAX seconds]:max seconds:' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
-         "    '--service[Create systemd user service with same parameters and activate it]:service name:'\n"
+         "    '--service[Create systemd user service (Linux) or launchd agent (macOS) with same parameters and activate it]:service name:'\n"
          "}\n"
          "\n"
          "# Register the completion function\n"
@@ -779,7 +779,7 @@ void help() {
   "  await 'curl -sf https://api.example.com' --backoff 60\n\n"
   "# get pinged the moment your site goes down\n"
   "  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send \"site is down\"'\n\n"
-  "# ...as a systemd daemon that survives reboots\n"
+  "# ...as a systemd/launchd daemon that survives reboots\n"
   "  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send \"site is down\"' --service site-monitor\n\n"
   "\nOPTIONS:\n"
   "  --help\t\t#print this help\n"
@@ -804,7 +804,7 @@ void help() {
   "  --expect -x\t\t#succeed when stdout matches this POSIX extended regex (^ and $ match at each line; exit status is ignored)\n"
   "  --times\t\t#a command is done only after N successful checks in a row (failures with --fail); a miss starts over [default: 1]\n"
   "  --backoff\t\t#after each failed check double the command's interval (±10% jitter), up to MAX seconds; a success resets it\n"
-  "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
+  "  --service -S\t\t#create systemd user service (Linux) or launchd agent (macOS) with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
   "  --update\t\t#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)\n"
 
@@ -887,8 +887,23 @@ void args_append_quoted(const char *s) {
   free(q);
 }
 
+// the command line as given (getopt_long permutes argv) and every --service
+// value, so the launchd agent can replay the exact arguments minus --service
+static char **orig_argv;
+static int orig_argc;
+static char **service_optargs;
+static int service_optargs_n;
+
 void parse_args(int argc, char *argv[]) {
     int getopt;
+    orig_argc = argc;
+    orig_argv = calloc(argc + 1, sizeof(char *));
+    service_optargs = calloc(argc + 1, sizeof(char *));
+    if (!orig_argv || !service_optargs) {
+      perror("await");
+      exit(1);
+    }
+    memcpy(orig_argv, argv, argc * sizeof(char *));
     char **names = calloc(argc, sizeof(char *));
     c = calloc(argc + 1, sizeof(COMMAND));
     int names_count = 0;
@@ -977,7 +992,7 @@ void parse_args(int argc, char *argv[]) {
           case 'a': args.any = 1; break;
           case 'F': args.forever = 1; break;
           case 'c': args.change = 1; break;
-          case 'S': args.service = optarg; break;
+          case 'S': args.service = optarg; service_optargs[service_optargs_n++] = optarg; break;
           case 'i': args.interval = (int)(atof(optarg) * 1000); break;
           case 'T': args.timeout = (int)(atof(optarg) * 1000); break;
           case 't': args.cmd_timeout = atoi(optarg); break;
@@ -1082,26 +1097,12 @@ void parse_args(int argc, char *argv[]) {
 }
 
 
-int service() {
-  FILE * fp;
-  const char *home;
-  if ((home = getenv("HOME")) == NULL)
-      home = getpwuid(getuid())->pw_dir;
+static int self_path(char *out, size_t size);
 
-  char* service = replace("NAME", args.service, "NAME.service");
-  char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
-  char cwd[PATH_MAX];
-  getcwd(cwd, sizeof(cwd));
-  char binary[PATH_MAX];
-  ssize_t len = readlink("/proc/self/exe", binary, sizeof(binary) - 1);
-  if (len < 0) {
-    fprintf(stderr, "await: --service needs /proc/self/exe (Linux with systemd)\n");
-    return 1;
-  }
-  binary[len] = '\0';
-
-  // mkdir -p without a shell, so any HOME works
-  char *dir = replace("HOME", home, "HOME/.config/systemd/user");
+// mkdir -p without a shell, so any HOME works
+static void mkdir_p(const char *path) {
+  char *dir = strdup(path);
+  if (!dir) return;
   for (char *p = dir + 1; *p; p++) {
     if (*p != '/') continue;
     *p = '\0';
@@ -1109,6 +1110,195 @@ int service() {
     *p = '/';
   }
   mkdir(dir, 0755);
+  free(dir);
+}
+
+// the name ends up in a file name and a systemd unit name or launchd label
+static int valid_service_name(const char *name) {
+  if (!*name) return 0;
+  for (const char *p = name; *p; p++) {
+    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')
+        || *p == '.' || *p == '_' || *p == '-')
+      continue;
+#ifndef __APPLE__
+    if (*p == ':') continue; // valid in systemd unit names, kept for compatibility
+#endif
+    return 0;
+  }
+  return strcmp(name, ".") && strcmp(name, "..");
+}
+
+static int service_no_activate(void) {
+  const char *v = getenv("AWAIT_SERVICE_NO_ACTIVATE");
+  return v && !strcmp(v, "1");
+}
+
+#ifdef __APPLE__
+// the original arguments (without argv[0]) minus every --service/-S and its
+// value, found by the optarg pointers getopt handed us; NULL-terminated
+static char **service_argv(void) {
+  char **out = calloc(orig_argc + 1, sizeof(char *));
+  char *drop = calloc(orig_argc + 1, 1);
+  char **cut = calloc(orig_argc + 1, sizeof(char *));
+  if (!out || !drop || !cut) {
+    perror("await");
+    exit(1);
+  }
+  for (int i = 0; i < service_optargs_n; i++) {
+    uintptr_t o = (uintptr_t)service_optargs[i];
+    for (int j = 1; j < orig_argc; j++) {
+      const char *a = orig_argv[j];
+      uintptr_t start = (uintptr_t)a;
+      size_t len = strlen(a);
+      if (o == start) {
+        // separate value: the option is the element right before it
+        drop[j] = 1;
+        const char *opt = orig_argv[j - 1];
+        size_t olen = strlen(opt);
+        if (opt[1] == '-' || olen <= 2) drop[j - 1] = 1;  // --service NAME, -S NAME
+        else if (!cut[j - 1]) cut[j - 1] = strndup(opt, olen - 1); // -fS NAME -> -f
+        break;
+      }
+      if (o > start && o <= start + len) {
+        // inline value: --service=NAME, -SNAME or -fSNAME
+        size_t keep = (size_t)(o - start) - 1;
+        if (a[1] == '-' || keep <= 1) drop[j] = 1;
+        else cut[j] = strndup(a, keep);
+        break;
+      }
+    }
+  }
+  int n = 0;
+  for (int j = 1; j < orig_argc; j++) {
+    if (drop[j]) continue;
+    out[n++] = cut[j] ? cut[j] : orig_argv[j];
+  }
+  free(drop);
+  free(cut);
+  return out;
+}
+
+static void plist_string(FILE *fp, const char *indent, const char *s) {
+  fprintf(fp, "%s<string>", indent);
+  for (; *s; s++) {
+    switch (*s) {
+      case '&': fputs("&amp;", fp); break;
+      case '<': fputs("&lt;", fp); break;
+      case '>': fputs("&gt;", fp); break;
+      case '"': fputs("&quot;", fp); break;
+      case '\'': fputs("&apos;", fp); break;
+      case '\r': fputs("&#13;", fp); break; // a literal CR would be read back as \n
+      default: fputc(*s, fp);
+    }
+  }
+  fputs("</string>\n", fp);
+}
+
+// run argv without a shell and return its exit status; quiet discards its output
+static int run_argv(char *const argv[], int quiet) {
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  if (quiet) {
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+  }
+  pid_t pid;
+  int rc = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  if (rc != 0) return -1;
+  int status;
+  while (waitpid(pid, &status, 0) < 0)
+    if (errno != EINTR) return -1;
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+// --service on macOS: a launchd agent in ~/Library/LaunchAgents
+static int service(const char *home, const char *binary, const char *cwd) {
+  size_t n = strlen(home) + strlen(args.service) + 64;
+  char *label = malloc(n), *agents = malloc(n), *plist = malloc(n), *logs = malloc(n), *log = malloc(n);
+  if (!label || !agents || !plist || !logs || !log) {
+    perror("await");
+    return 1;
+  }
+  snprintf(label, n, "await.%s", args.service);
+  snprintf(agents, n, "%s/Library/LaunchAgents", home);
+  snprintf(plist, n, "%s/%s.plist", agents, label);
+  snprintf(logs, n, "%s/Library/Logs", home);
+  snprintf(log, n, "%s/await-%s.log", logs, args.service);
+  mkdir_p(agents);
+  mkdir_p(logs);
+
+  FILE *fp = fopen(plist, "w");
+  if (!fp) {
+    fprintf(stderr, "await: cannot write %s: %s\n", plist, strerror(errno));
+    return 1;
+  }
+  fputs("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\">\n"
+        "<dict>\n"
+        "  <key>Label</key>\n", fp);
+  plist_string(fp, "  ", label);
+  fputs("  <key>ProgramArguments</key>\n  <array>\n", fp);
+  plist_string(fp, "    ", binary);
+  char **av = service_argv();
+  for (char **a = av; *a; a++) plist_string(fp, "    ", *a);
+  fputs("  </array>\n  <key>WorkingDirectory</key>\n", fp);
+  plist_string(fp, "  ", cwd);
+  // launchd's default PATH is minimal; keep the one the commands were tried with
+  const char *path = getenv("PATH");
+  if (path) {
+    fputs("  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PATH</key>\n", fp);
+    plist_string(fp, "    ", path);
+    fputs("  </dict>\n", fp);
+  }
+  // like Restart=always in the systemd unit: start at login, restart whenever it exits
+  fputs("  <key>RunAtLoad</key>\n  <true/>\n"
+        "  <key>KeepAlive</key>\n  <true/>\n"
+        "  <key>StandardOutPath</key>\n", fp);
+  plist_string(fp, "  ", log);
+  fputs("  <key>StandardErrorPath</key>\n", fp);
+  plist_string(fp, "  ", log);
+  fputs("</dict>\n</plist>\n", fp);
+  if (fclose(fp) != 0) {
+    fprintf(stderr, "await: cannot write %s: %s\n", plist, strerror(errno));
+    return 1;
+  }
+  printf("await: wrote %s\n", plist);
+  if (service_no_activate()) return 0;
+
+  char domain[64];
+  snprintf(domain, sizeof(domain), "gui/%d", (int)getuid());
+  char *target = malloc(strlen(domain) + strlen(label) + 2);
+  if (!target) {
+    perror("await");
+    return 1;
+  }
+  sprintf(target, "%s/%s", domain, label);
+  char *bootout[] = {"launchctl", "bootout", target, NULL};
+  run_argv(bootout, 1); // fails when it is not loaded yet, which is fine
+  char *bootstrap[] = {"launchctl", "bootstrap", domain, plist, NULL};
+  if (run_argv(bootstrap, 0) != 0) {
+    char *load[] = {"launchctl", "load", "-w", plist, NULL};
+    if (run_argv(load, 0) != 0) {
+      fprintf(stderr, "await: launchctl could not load %s\n", plist);
+      return 1;
+    }
+  }
+  printf("await: started %s\n"
+         "  logs: tail -f '%s'\n"
+         "  stop: launchctl bootout gui/$UID/%s\n",
+         label, log, label);
+  return 0;
+}
+#else
+// --service on Linux: a systemd user unit in ~/.config/systemd/user
+static int service(const char *home, const char *binary, const char *cwd) {
+  FILE * fp;
+  char* service = replace("NAME", args.service, "NAME.service");
+  char* f = replace("SERVICE", service, replace("HOME", home, "HOME/.config/systemd/user/SERVICE"));
+
+  mkdir_p(replace("HOME", home, "HOME/.config/systemd/user"));
   fp = fopen(f, "w");
   if (!fp) {
     fprintf(stderr, "await: cannot write %s: %s\n", f, strerror(errno));
@@ -1132,8 +1322,106 @@ int service() {
    , args.args, replace("%", "%%", cwd), exec_start);
   fclose(fp);
 
+  if (service_no_activate()) {
+    printf("await: wrote %s\n", f);
+    return 0;
+  }
   system(replace("SERVICE", service, "systemctl --user daemon-reload; systemctl cat --user SERVICE; systemctl enable --user SERVICE; systemctl restart --user SERVICE; journalctl --user --follow --unit SERVICE"));
   return 0;
+}
+#endif
+
+// NULL if s can go into the service file, else what is wrong with it: systemd
+// ignores unit file lines that are not UTF-8, and a plist (XML 1.0) also cannot
+// hold control characters other than tab, newline and carriage return
+static const char *service_text_problem(const char *s) {
+  const unsigned char *p = (const unsigned char *)s;
+  while (*p) {
+    unsigned c = *p;
+    if (c < 0x80) {
+#ifdef __APPLE__
+      if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return "a control character";
+#endif
+      p++;
+      continue;
+    }
+    int n;
+    unsigned cp;
+    if (c >= 0xC2 && c <= 0xDF) { n = 1; cp = c & 0x1F; }
+    else if (c >= 0xE0 && c <= 0xEF) { n = 2; cp = c & 0x0F; }
+    else if (c >= 0xF0 && c <= 0xF4) { n = 3; cp = c & 0x07; }
+    else return "invalid UTF-8";
+    for (int i = 1; i <= n; i++) {
+      if ((p[i] & 0xC0) != 0x80) return "invalid UTF-8"; // also stops at the terminating NUL
+      cp = (cp << 6) | (p[i] & 0x3F);
+    }
+    if ((n == 2 && cp < 0x800) || (n == 3 && (cp < 0x10000 || cp > 0x10FFFF))
+        || (cp >= 0xD800 && cp <= 0xDFFF))
+      return "invalid UTF-8";
+#ifdef __APPLE__
+    if (cp == 0xFFFE || cp == 0xFFFF) return "a non-character";
+#endif
+    p += n + 1;
+  }
+  return NULL;
+}
+
+#ifdef __APPLE__
+#define SERVICE_FILE "a launchd plist"
+#else
+#define SERVICE_FILE "a systemd unit"
+#endif
+
+static int service_text_ok(const char *what, const char *s) {
+  const char *problem = service_text_problem(s);
+  if (!problem) return 1;
+  fprintf(stderr, "await: --service: %s contains %s, which %s cannot hold; nothing was written\n",
+          what, problem, SERVICE_FILE);
+  return 0;
+}
+
+int service_main() {
+  if (!valid_service_name(args.service)) {
+    fprintf(stderr, "await: invalid --service name '%s': use only letters, digits, '.', '_' and '-'\n", args.service);
+    return 2;
+  }
+  const char *home;
+  if ((home = getenv("HOME")) == NULL)
+      home = getpwuid(getuid())->pw_dir;
+  char binary[PATH_MAX];
+  if (self_path(binary, sizeof(binary)) != 0) {
+    fprintf(stderr, "await: --service cannot find the path of this binary\n");
+    return 1;
+  }
+  // the service runs from here; falling back to / would break relative paths
+  char cwd[PATH_MAX];
+  struct stat named, here;
+  if (!getcwd(cwd, sizeof(cwd))) {
+    fprintf(stderr, "await: --service cannot use the current directory as the service's working directory: %s\n",
+            strerror(errno));
+    return 1;
+  }
+  // getcwd may still name a directory that was deleted (or replaced) since
+  if (stat(cwd, &named) != 0 || stat(".", &here) != 0
+      || named.st_dev != here.st_dev || named.st_ino != here.st_ino) {
+    fprintf(stderr, "await: --service cannot use the current directory as the service's working directory: "
+            "%s no longer exists\n", cwd);
+    return 1;
+  }
+
+  for (int i = 1; i < orig_argc; i++) {
+    char what[32];
+    snprintf(what, sizeof(what), "argument %d", i);
+    if (!service_text_ok(what, orig_argv[i])) return 2;
+  }
+  if (!service_text_ok("the current directory", cwd) || !service_text_ok("HOME", home)
+      || !service_text_ok("the path of this binary", binary))
+    return 2;
+#ifdef __APPLE__
+  const char *path = getenv("PATH");
+  if (path && !service_text_ok("PATH", path)) return 2;
+#endif
+  return service(home, binary, cwd);
 }
 
 // does out (len bytes, possibly with NULs) match --expect? regexec reads C
@@ -1642,7 +1930,7 @@ int main(int argc, char *argv[]) {
     nofile.rlim_cur = nofile.rlim_max == RLIM_INFINITY || nofile.rlim_max > 10240 ? 10240 : nofile.rlim_max;
     setrlimit(RLIMIT_NOFILE, &nofile);
   }
-  if (args.service) return service();
+  if (args.service) return service_main();
   update_check();
 
   // Ensure the program does not ignore signals when running in a script

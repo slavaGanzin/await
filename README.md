@@ -250,7 +250,7 @@ EXAMPLES:
 # get pinged the moment your site goes down
   await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"'
 
-# ...as a systemd daemon that survives reboots
+# ...as a systemd/launchd daemon that survives reboots
   await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"' --service site-monitor
 
 
@@ -277,7 +277,7 @@ OPTIONS:
   --expect -x		#succeed when stdout matches this POSIX extended regex (^ and $ match at each line; exit status is ignored)
   --times		#a command is done only after N successful checks in a row (failures with --fail); a miss starts over [default: 1]
   --backoff		#after each failed check double the command's interval (±10% jitter), up to MAX seconds; a success resets it
-  --service -S		#create systemd user service with same parameters and activate it
+  --service -S		#create systemd user service (Linux) or launchd agent (macOS) with same parameters and activate it
   --version -v		#print the version of await
   --update		#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)
   --autocompletions	#detect installed shells and auto-install completions for all of them
