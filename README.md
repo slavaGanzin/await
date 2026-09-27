@@ -9,6 +9,10 @@
 
 ### install
 ```bash
+# homebrew (macOS and Linux)
+brew tap slavaganzin/await https://github.com/slavaGanzin/await
+brew install slavaganzin/await/await
+
 # recommended way (crossplatform)
 stew i slavaGanzin/await  # https://github.com/marwanhawari/stew
 # or

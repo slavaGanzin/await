@@ -193,10 +193,106 @@ jobs:
         name: await-linux-musl-${{ matrix.arch }}
         path: linux-musl-${{ matrix.arch }}
 
+  # The tap formula (Formula/await.rb) installs the latest published release:
+  # generate it from that release's SHA256SUMS and install and test it with brew
+  homebrew:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_ENV_HINTS: 1
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check the committed formula
+      run: ruby -c Formula/await.rb
+
+    - name: Install the formula for the latest release from a local tap
+      run: |
+        set -euo pipefail
+        [ -x /home/linuxbrew/.linuxbrew/bin/brew ] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        VERSION=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+        gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+        scripts/homebrew-formula.sh "$VERSION" "$RUNNER_TEMP/SHA256SUMS" "$RUNNER_TEMP/await.rb"
+        ruby -c "$RUNNER_TEMP/await.rb"
+        brew tap-new --no-git local/await
+        cp "$RUNNER_TEMP/await.rb" "$(brew --repository local/await)/Formula/await.rb"
+        brew install local/await/await
+        brew test local/await/await
+        await --version
+        ls "$(brew --prefix)/share/zsh/site-functions/_await" "$(brew --prefix)/etc/bash_completion.d/await" \
+           "$(brew --prefix)/share/fish/vendor_completions.d/await.fish"
+
+    # Install the committed formula too, when it is for the latest release. Its
+    # pins go stale on a branch as soon as main re-publishes (main's copy is the
+    # one the release job keeps current), so a mismatch only fails the job when
+    # main's formula doesn't match the live SHA256SUMS either, after giving a
+    # release job that is between uploading and committing a few minutes.
+    - name: Install the committed formula
+      run: |
+        set -euo pipefail
+        [ -x /home/linuxbrew/.linuxbrew/bin/brew ] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        formula_version() { sed -n 's/^  version "\(.*\)"$/\1/p' "$1"; }
+        live() {
+          rm -f "$RUNNER_TEMP/live.sums"
+          gh release download "$LATEST" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --output "$RUNNER_TEMP/live.sums"
+        }
+        LATEST=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+        committed=$(formula_version Formula/await.rb)
+        if [ "$committed" != "$LATEST" ]; then
+          echo "::notice::Formula/await.rb is for $committed, the latest release is $LATEST: not installing it"
+          exit 0
+        fi
+        formula=Formula/await.rb
+        live
+        if ! scripts/homebrew-formula.sh --check "$RUNNER_TEMP/live.sums" "$formula"; then
+          git fetch -q --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          if ! git show origin/main:Formula/await.rb > "$RUNNER_TEMP/main.rb" 2>/dev/null; then
+            echo "::warning::Formula/await.rb pins older checksums than the live $LATEST release, and main has no formula yet to compare with"
+            exit 0
+          fi
+          if [ "$(formula_version "$RUNNER_TEMP/main.rb")" != "$LATEST" ]; then
+            echo "::warning::Formula/await.rb pins older checksums than the live $LATEST release; main's formula is for another version"
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5 6; do
+            scripts/homebrew-formula.sh --check "$RUNNER_TEMP/live.sums" "$RUNNER_TEMP/main.rb" && break
+            if [ "$attempt" = 6 ]; then
+              echo "::error::committed formula is stale: Formula/await.rb on main doesn't match the live $LATEST SHA256SUMS, so brew install fails"
+              exit 1
+            fi
+            echo "waiting for a release job to commit the formula for the re-published archives..."
+            sleep 60
+            git fetch -q --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+            git show origin/main:Formula/await.rb > "$RUNNER_TEMP/main.rb"
+            live
+          done
+          echo "::notice::this commit's Formula/await.rb is older than main's, which matches the live release: installing main's"
+          formula="$RUNNER_TEMP/main.rb"
+        fi
+        brew uninstall --formula local/await/await
+        cp "$formula" "$(brew --repository local/await)/Formula/await.rb"
+        brew install local/await/await
+        brew test local/await/await
+        [ "$(await --version)" = "$LATEST" ]
+
   release:
     needs: [build, build-linux-static]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # pushes the regenerated Homebrew formula to main (and uploads the release)
+    permissions:
+      contents: write
+    # one release at a time: a queued newer run replaces an older queued one
+    concurrency:
+      group: release
+      cancel-in-progress: false
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
@@ -305,3 +401,62 @@ jobs:
         body_path: release_notes.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # The archives (so their checksums) change on every push to main, so the tap
+    # formula is regenerated from the SHA256SUMS that is live on the release now
+    # and committed to main. Release jobs run one at a time (concurrency above),
+    # so whichever runs last leaves the formula matching what is published, even
+    # if a newer push never gets as far as its release. Pushes made with
+    # GITHUB_TOKEN don't start workflow runs (and the commit carries the skip
+    # marker), so this can't loop; nothing is committed when the formula is
+    # unchanged, and a formula for a newer version is never replaced.
+    - name: Update Homebrew formula
+      env:
+        VERSION: ${{ steps.get_version.outputs.VERSION }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        formula_version() { sed -n 's/^  version "\(.*\)"$/\1/p' "$1" 2>/dev/null || true; }
+        mkdir -p "$RUNNER_TEMP/live"
+        gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP/live" --clobber
+        scripts/homebrew-formula.sh "$VERSION" "$RUNNER_TEMP/live/SHA256SUMS" "$RUNNER_TEMP/await.rb"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        for attempt in 1 2 3 4; do
+          git fetch -q origin +refs/heads/main:refs/remotes/origin/main
+          git checkout -q -f -B homebrew-formula origin/main
+          committed=$(formula_version Formula/await.rb)
+          if [ -n "$committed" ] && [ "$committed" != "$VERSION" ] &&
+             [ "$(printf '%s\n%s\n' "$committed" "$VERSION" | sort -V | tail -n1)" = "$committed" ]; then
+            echo "main's formula is for $committed, newer than $VERSION: leaving it"; exit 0
+          fi
+          cp "$RUNNER_TEMP/await.rb" Formula/await.rb
+          if git diff --quiet -- Formula/await.rb; then
+            echo "Formula/await.rb is up to date"; exit 0
+          fi
+          git add Formula/await.rb
+          git commit -q -m "Update Homebrew formula for $VERSION [skip ci]"
+          git push -q origin HEAD:main && exit 0
+          sleep $((attempt * 5))
+        done
+        echo "could not push the formula update to main" >&2
+        exit 1
+
+    # a formula whose pins don't match the published archives breaks every brew install
+    - name: Verify the Homebrew formula on main
+      env:
+        VERSION: ${{ steps.get_version.outputs.VERSION }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        git fetch -q origin +refs/heads/main:refs/remotes/origin/main
+        git show origin/main:Formula/await.rb > "$RUNNER_TEMP/main.rb"
+        committed=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$RUNNER_TEMP/main.rb")
+        if [ "$committed" != "$VERSION" ]; then
+          echo "main's formula is for $committed, not $VERSION: nothing to verify"; exit 0
+        fi
+        gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir "$RUNNER_TEMP/live" --clobber
+        if ! scripts/homebrew-formula.sh --check "$RUNNER_TEMP/live/SHA256SUMS" "$RUNNER_TEMP/main.rb"; then
+          echo "::error::committed formula is stale: Formula/await.rb on main doesn't match the live $VERSION SHA256SUMS"
+          exit 1
+        fi
