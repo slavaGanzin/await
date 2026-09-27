@@ -3199,8 +3199,8 @@ class TestTimes:
         fired = os.path.join(pattern.root, "fired")
         cmd = f"n=\\$(cat {counter} 2>/dev/null || echo 0); echo \\$((n+1)) > {counter}; echo \\$n"
         returncode, stdout, stderr = run_await_with_timeout(
-            f'-V -T 1.5 -i 0.05 --change --times 2 --forever "{cmd}" --exec "echo x >> {fired}"',
-            timeout=5.0
+            f'-V -T 3 -i 0.05 --change --times 2 --forever "{cmd}" --exec "echo x >> {fired}"',
+            timeout=8.0
         )
         assert returncode == 1  # -T ends --forever
         time.sleep(0.2)  # let an --exec started just before exit finish
@@ -3208,10 +3208,12 @@ class TestTimes:
             changes = int(f.read()) - 1  # the first run is the baseline
         with open(fired) as f:
             fires = len(f.readlines())
-        assert changes >= 10, changes
+        # enough changes to tell "every 2nd" from "only the 2nd" (~0.15s a run on
+        # a slow runner still gives ~20 in 3s)
+        assert changes >= 8, changes
         # one --exec per 2 changes; at exit, a run in progress may have bumped
         # the counter and the last streak may still be pending
-        assert changes // 2 - 2 <= fires <= changes // 2, (changes, fires)
+        assert fires >= 2 and changes // 2 - 2 <= fires <= changes // 2, (changes, fires)
 
     def test_completed_streak_is_not_lost_when_it_breaks(self, pattern):
         """A command that reached N counts as done even if a later check broke
