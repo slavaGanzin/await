@@ -210,7 +210,7 @@ jobs:
       with:
         msystem: MSYS
         update: true
-        install: gcc make cmake python python-pip curl procps-ng tar
+        install: gcc make cmake python python-pip curl procps-ng tar groff
 
     - name: Build
       run: |
