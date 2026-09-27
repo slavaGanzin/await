@@ -3434,6 +3434,241 @@ class TestPublishOrder:
             assert command["status"] == 0
             assert command["output"] == "done\n"
 
+
+class TestFeatureInteractions:
+    """Flags from 2.11.0 combined: --expect, --times, --backoff, --notify, --service."""
+
+    SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "await.c")
+    AWAIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "await")
+
+    # run k prints/does step k of a comma-separated pattern (the last one repeats):
+    #   up    prints UP<k> and exits 1 (a match, whatever the exit status)
+    #   down  prints DOWN<k> and exits 0 (no match, whatever the exit status)
+    #   hang  sleeps past -t 1, so the run is killed (status 124)
+    PATTERN_SCRIPT = (
+        "#!/bin/sh\n"
+        "n=$(cat \"$1.n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$1.n\"\n"
+        "r=$(echo \"$2\" | cut -d, -f$n); [ -z \"$r\" ] && r=$(echo \"$2\" | awk -F, '{print $NF}')\n"
+        "echo \"$r\" >> \"$1.log\"\n"
+        "case $r in\n"
+        "  up) echo UP$n; exit 1;;\n"
+        "  down) echo DOWN$n; exit 0;;\n"
+        "  hang) sleep 3;;\n"
+        "esac\n"
+    )
+
+    @pytest.fixture
+    def pattern(self):
+        import shutil
+        root = tempfile.mkdtemp(dir=TMPDIR)
+        script = os.path.join(root, "pattern.sh")
+        with open(script, "w") as f:
+            f.write(self.PATTERN_SCRIPT)
+        os.chmod(script, 0o755)
+        state = os.path.join(root, "state")
+
+        def make(steps):
+            return f"{script} {state} {steps}"
+
+        def runs():
+            try:
+                with open(state + ".log") as f:
+                    return f.read().split()
+            except FileNotFoundError:
+                return []
+        make.runs = runs
+        make.root = root
+        yield make
+        shutil.rmtree(root, ignore_errors=True)
+
+    @staticmethod
+    def run(argv, env=None, timeout=15):
+        base = {k: v for k, v in os.environ.items()
+                if k not in ("TERM_PROGRAM", "LC_TERMINAL", "KITTY_WINDOW_ID", "WT_SESSION", "TMUX",
+                             "SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT")}
+        base.update(AWAIT_NO_UPDATE_CHECK="1", NO_COLOR="1", **(env or {}))
+        return subprocess.run([TestFeatureInteractions.AWAIT, *argv], env=base,
+                              capture_output=True, text=True, timeout=timeout)
+
+    # --expect + --times
+
+    def test_expect_times_counts_matches_in_a_row(self, pattern):
+        """Exit statuses are the opposite of the matches: only the output counts."""
+        cmd = pattern("down,up,down,up,up,up")
+        r = self.run(["-V", "-i", "0.05", "--expect", "^UP", "--times", "3", "--json", cmd])
+        assert r.returncode == 0, r.stderr
+        assert pattern.runs()[:6] == ["down", "up", "down", "up", "up", "up"]
+        result = json.loads(r.stdout)["commands"][0]
+        assert result["status"] == 0 and result["streak"] == 3 and result["times"] == 3
+
+    def test_expect_times_cmd_timeout_breaks_the_streak(self, pattern):
+        """A run killed by -t neither matched nor failed to match: it starts the streak over."""
+        cmd = pattern("up,hang,up,up")
+        r = self.run(["-V", "-i", "0.05", "-t", "1", "--expect", "^UP", "--times", "2", "-T", "10", cmd])
+        assert r.returncode == 0, r.stderr
+        # up, hang (streak broken), up, up: not done at the first up after the hang
+        assert pattern.runs()[:4] == ["up", "hang", "up", "up"]
+
+    def test_expect_times_fail_cmd_timeout_is_not_a_failure(self, pattern):
+        """--fail: a streak of non-matches; a killed run is not a non-match either."""
+        cmd = pattern("down,hang,down,down")
+        r = self.run(["-V", "-i", "0.05", "-t", "1", "--fail", "--expect", "^UP", "--times", "2",
+                      "-T", "10", "--json", cmd])
+        assert r.returncode == 0, r.stderr
+        runs = pattern.runs()
+        # were the timed-out run counted, the streak would complete at run 2
+        assert runs[:4] == ["down", "hang", "down", "down"], runs
+        assert json.loads(r.stdout)["commands"][0]["streak"] == 2
+
+    def test_expect_times_timeout_report(self, pattern):
+        cmd = pattern("up,down")
+        r = self.run(["-i", "0.05", "--expect", "^UP", "--times", "3", "-T", "0.6", cmd])
+        assert r.returncode == 1
+        assert "last output did not match --expect" in r.stderr, r.stderr
+        assert "0 of 3 checks in a row" in r.stderr, r.stderr
+
+    def test_expect_change_times_counts_only_matching_changes(self, pattern):
+        """--change --expect --times 2: a change to non-matching output breaks the streak."""
+        cmd = pattern("up,up,down,up,up")
+        r = self.run(["-V", "-i", "0.05", "--change", "--expect", "^UP", "--times", "2", "-T", "10", cmd])
+        assert r.returncode == 0, r.stderr
+        # run 2 changes (1 in a row), run 3 changes to DOWN (not counted: 0),
+        # runs 4 and 5 change to matching output (2 in a row)
+        runs = pattern.runs()
+        assert runs[:5] == ["up", "up", "down", "up", "up"], runs
+
+    # --backoff + --expect
+
+    def test_backoff_resets_on_expect_match(self, pattern):
+        """Misses back off; a match (exit 1 here) is a successful check and resets the pause."""
+        cmd = pattern("down,down,down,down,up")
+        r = self.run(["-V", "-i", "0.1", "--backoff", "0.8", "--expect", "^UP", "--forever", "-T", "4", cmd])
+        assert r.returncode == 1  # --forever ends at -T
+        runs = pattern.runs()
+        assert runs[:4] == ["down"] * 4
+        # the misses take ~1.5s of pauses (0.1+0.2+0.4+0.8); the matches are then
+        # 0.1s apart for the remaining ~2.5s. Backing off on them (0.8s) would
+        # leave room for about 3.
+        assert runs.count("up") >= 8, runs
+
+    def test_backoff_fail_expect_counts_non_matches_as_success(self, pattern):
+        """--fail --expect: a non-match is what we wait for, so it keeps the interval."""
+        cmd = pattern("down")
+        r = self.run(["-V", "-i", "0.1", "--backoff", "2", "--fail", "--expect", "^UP", "--forever", "-T", "2", cmd])
+        assert r.returncode == 1
+        assert len(pattern.runs()) >= 8, pattern.runs()
+
+    # --notify + --expect/--times
+
+    def notify_body(self, argv, tmp_path, **kw):
+        tty = tmp_path / "tty"
+        tty.write_bytes(b"")
+        r = self.run(["--notify", "-V", *argv], env={"TERM_PROGRAM": "WezTerm", "AWAIT_NOTIFY_TTY": str(tty)}, **kw)
+        m = re.search(rb"\x1b\]9;await: (.*?)(?:\x07|\x1b\\)", tty.read_bytes())
+        assert m, (tty.read_bytes(), r.stderr)
+        return r, m.group(1).decode()
+
+    def test_notify_expect_times_done(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--expect", "UP", "--times", "2", "echo UP; exit 3"], tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert re.fullmatch(r"done in \d+\.\ds: echo UP; exit 3 matched --expect \(2 of 2 checks in a row\)", body), body
+
+    def test_notify_expect_times_several_commands(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--expect", "UP", "--times", "2", "echo UP", "echo UP"], tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert re.fullmatch(r"done in \d+\.\ds: 2/2 commands matched --expect 2 times in a row", body), body
+
+    def test_notify_expect_timeout(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--expect", "UP", "--times", "3", "-T", "0.5",
+                                    "echo UP", "echo DOWN"], tmp_path)
+        assert r.returncode == 1
+        assert re.fullmatch(r"timed out after 0\.\ds: 1/2 commands matched --expect 3 times in a row; "
+                            r"echo DOWN didn't match --expect \(0 of 3 checks in a row\)", body), body
+
+    def test_notify_expect_fail(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--fail", "--expect", "UP", "echo DOWN", "echo NOPE"], tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert re.fullmatch(r"done in \d+\.\ds: 2/2 commands didn't match --expect", body), body
+
+    def test_notify_expect_cmd_timeout(self, tmp_path):
+        r, body = self.notify_body(["-t", "1", "-T", "1.5", "--expect", "UP", "sleep 3; echo UP"], tmp_path)
+        assert r.returncode == 1
+        assert re.fullmatch(r"timed out after 1\.\ds: sleep 3; echo UP exited 124 \(--cmd-timeout\)", body), body
+
+    # --service replays every flag, and getopt values never collide
+
+    @staticmethod
+    def long_options():
+        """(name, has_arg, val) rows of parse_args' long_options table."""
+        with open(TestFeatureInteractions.SRC) as f:
+            src = f.read()
+        table = src[src.index("static struct option long_options[]"):]
+        table = table[:table.index("{0, 0, 0, 0}")]
+        return re.findall(r'\{"([\w-]+)",\s*(\w+),\s*0,\s*([^}\s]+)\s*\}', table)
+
+    def test_no_duplicate_getopt_values(self):
+        rows = self.long_options()
+        assert len(rows) > 20
+        vals = [val for _, _, val in rows if val != "0"]
+        assert len(vals) == len(set(vals)), vals
+        # the OPT_* constants must be distinct numbers, and not clash with a short letter
+        with open(self.SRC) as f:
+            src = f.read()
+        enums = re.findall(r"enum\s*\{\s*(OPT_[^}]*)\}", src)
+        assert len(enums) == 1, enums
+        members = [m.strip() for m in enums[0].split(",") if m.strip()]
+        values, n = {}, None
+        for m in members:
+            name, _, v = m.partition("=")
+            n = int(v) if v.strip() else n + 1
+            values[name.strip()] = n
+        assert len(set(values.values())) == len(values)
+        assert min(values.values()) > 255
+        assert not re.search(r"#define\s+OPT_", src)
+        used = {val for _, _, val in rows if val.startswith("OPT_")}
+        assert used <= set(values), used - set(values)
+        # every short letter in the optstring appears once
+        optstring = re.search(r'getopt_long\(argc, argv, "([^"]+)"', src).group(1)
+        letters = optstring.replace(":", "")
+        assert len(letters) == len(set(letters)), optstring
+
+    def test_every_option_is_in_help_and_completions(self):
+        help_text = self.run(["--help"]).stdout
+        bash = self.run(["--autocomplete-bash"]).stdout
+        for name, _, val in self.long_options():
+            if val == "0":  # --update and the autocomplete helpers
+                continue
+            assert f"--{name}" in help_text, name
+            assert f"--{name}" in bash, name
+
+    @pytest.mark.skipif(platform.system() != "Linux", reason="systemd unit on Linux")
+    def test_service_replays_every_flag_under_its_own_name(self, tmp_path):
+        """Every long option that --service replays comes back under its own
+        name, exactly once (a shared getopt value would replay the wrong name)."""
+        argv, expected = [], []
+        for name, has_arg, val in self.long_options():
+            if val == "0" or name in ("help", "version", "service"):
+                continue
+            argv.append(f"--{name}")
+            if has_arg == "required_argument":
+                argv.append("1")
+                expected.append(f'--{name} "1"')
+            else:
+                expected.append(f"--{name}")
+        home = tmp_path / "home"
+        home.mkdir()
+        r = self.run([*argv, "true", "--service", "every"], env={"HOME": str(home), "AWAIT_SERVICE_NO_ACTIVATE": "1"})
+        assert r.returncode == 0, r.stderr
+        unit = (home / ".config/systemd/user/every.service").read_text()
+        exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
+        tokens = re.findall(r'--[\w-]+(?: "1")?', exec_start)
+        for flag in expected:
+            assert tokens.count(flag) == 1, (flag, exec_start)
+        assert len(tokens) == len(expected), exec_start
+        for flag in ("--expect", "--times", "--backoff", "--notify"):
+            assert flag in exec_start
+
+
 if __name__ == "__main__":
     # Make sure await binary exists
     if not os.path.exists("../await"):
