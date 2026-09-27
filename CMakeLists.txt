@@ -11,14 +11,14 @@ endif()
 
 add_executable(await await.c)
 
-if(CMAKE_BUILD_TYPE MATCHES "^(MinSizeRel|Release)$")
-  if(APPLE)
-    # strip at link time: a later `strip` would invalidate the linker's
-    # ad-hoc code signature on Apple Silicon
-    target_link_options(await PRIVATE -Wl,-S -Wl,-x)
-  else()
-    target_link_options(await PRIVATE -s)
-  endif()
+# by configuration, so multi-config generators (Xcode, Ninja Multi-Config)
+# strip their Release builds too
+if(APPLE)
+  # strip at link time: a later `strip` would invalidate the linker's
+  # ad-hoc code signature on Apple Silicon
+  target_link_options(await PRIVATE "$<$<CONFIG:MinSizeRel,Release>:-Wl,-S;-Wl,-x>")
+else()
+  target_link_options(await PRIVATE $<$<CONFIG:MinSizeRel,Release>:-s>)
 endif()
 
 # Generate autocompletion files
