@@ -15,7 +15,7 @@
 
 ### Changes
 
-- Release binaries are size-optimised and stripped (they used to ship with debug info). Unused code is dropped at link time, and on Linux the unwind tables and the 4KB padding between segments are gone. On x86_64 Linux that takes the 2.11.0 glibc build from 99KB to 61KB and the static musl build from 248KB to 187KB; the other targets are built the same way.
+- Release binaries are size-optimised and stripped (they used to ship with debug info). Unused code is dropped at link time, and on Linux the unwind tables and the 4KB padding between segments are gone. On x86_64 Linux that takes the 2.11.0 glibc build from 99KB to 61KB and the static musl build from 248KB to 183KB, with the shell completions now generated from one table instead of three hand-written copies; the other targets are built the same way.
 - CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
 
 ---

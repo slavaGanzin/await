@@ -144,35 +144,46 @@ char* replace(const char* oldW, const char* newW, const char* s) {
   return 0;
 }
 
+// Options as the shell completions offer them. Descriptions go inside single
+// quotes (fish, zsh) and zsh [...], so no ' [ ] in them. arg: 1 takes a
+// value, 2 takes a command.
+static const struct { const char *name; char letter, arg; const char *desc; } completions[] = {
+  {"help", 0, 0, "Print this help"},
+  {"version", 'v', 0, "Print the version of await"},
+  {"update", 0, 0, "Update await to the latest release"},
+  {"stdout", 'o', 0, "Print stdout of commands"},
+  {"no-stderr", 'E', 0, "Suppress stderr of commands"},
+  {"silent", 'V', 0, "Do not print spinners and commands"},
+  {"watch", 'w', 0, "Same as -fVodE (fail, silent, stdout, diff, no-stderr)"},
+  {"fail", 'f', 0, "Wait for commands to fail"},
+  {"status", 's', 1, "Expected exit status (default: 0)"},
+  {"any", 'a', 0, "Done when any command returns the expected status"},
+  {"change", 'c', 0, "Wait for stdout to change, ignoring exit status"},
+  {"diff", 'd', 0, "Highlight changes between runs"},
+  {"exec", 'e', 2, "Run a shell command on success"},
+  {"interval", 'i', 1, "Seconds between rounds of commands (default: 0.2)"},
+  {"timeout", 'T', 1, "Seconds to wait before giving up"},
+  {"cmd-timeout", 't', 1, "Seconds per command run before killing it"},
+  {"retry", 'r', 1, "Max runs of each command before giving up"},
+  {"forever", 'F', 0, "Never exit"},
+  {"name", 'n', 1, "Label for the next command"},
+  {"json", 'j', 0, "Print results as JSON on exit"},
+  {"lap", 'l', 0, "Show last run duration per command"},
+  {"expect", 'x', 1, "Succeed when stdout matches this extended regex"},
+  {"times", 0, 1, "Successful checks needed in a row (default: 1)"},
+  {"backoff", 0, 1, "Double the interval after each failed check, up to MAX seconds"},
+  {"notify", 0, 0, "Desktop notification when await finishes"},
+  {"service", 'S', 1, "Create a systemd user service (Linux) or launchd agent (macOS)"},
+};
+#define N_COMPLETIONS (sizeof(completions) / sizeof(completions[0]))
+
 void print_autocomplete_fish() {
-  printf("complete -c await -l version -s v -d 'Print the version of await'\n"
-         "complete -c await -l update -d 'Update await to the latest release'\n"
-         "complete -c await -l help -d 'Print this help'\n"
-         "complete -c await -l stdout -s o -d 'Print stdout of commands'\n"
-         "complete -c await -l silent -s V -d 'Do not print spinners and commands'\n"
-         "complete -c await -l fail -s f -d 'Waiting commands to fail'\n"
-         "complete -c await -l status -s s -d 'Expected status [default: 0]' -r\n"
-         "complete -c await -l any -s a -d 'Terminate if any of command return expected status'\n"
-         "complete -c await -l change -s c -d 'Waiting for stdout to change and ignore status codes'\n"
-         "complete -c await -l diff -s d -d 'Highlight differences between previous and current output'\n"
-         "complete -c await -l exec -s e -d 'Run some shell command on success' -r\n"
-         "complete -c await -l interval -s i -d 'Seconds between one round of commands [default: 0.2]' -r\n"
-         "complete -c await -l timeout -s T -d 'Seconds to wait before giving up [default: 0]' -r\n"
-         "complete -c await -l cmd-timeout -s t -d 'Seconds per command before killing it' -r\n"
-         "complete -c await -l retry -s r -d 'Max number of attempts before giving up [default: 0 (unlimited)]' -r\n"
-         "complete -c await -l forever -s F -d 'Do not exit ever'\n"
-         "complete -c await -l name -s n -d 'Label for the next command (usable as \\\\name in --exec)' -r\n"
-         "complete -c await -l json -s j -d 'Output results as JSON on exit'\n"
-         "complete -c await -l lap -s l -d 'Show last run duration per command in spinner'\n"
-         "complete -c await -l expect -s x -d 'Succeed when stdout matches this extended regex (exit status ignored)' -r\n"
-         "complete -c await -l times -d 'Consecutive successful checks needed [default: 1]' -r\n"
-         "complete -c await -l backoff -d 'Double the interval after each failed check, up to MAX seconds' -r\n"
-         "complete -c await -l notify -d 'Desktop notification when await finishes'\n"
-         "complete -c await -l service -s S -d 'Create systemd user service (Linux) or launchd agent (macOS) with same parameters and activate it'\n"
-         "complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
-         "complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
-         "\n"
-         "# For command completion\n"
+  for (size_t i = 0; i < N_COMPLETIONS; i++) {
+    printf("complete -c await -l %s", completions[i].name);
+    if (completions[i].letter) printf(" -s %c", completions[i].letter);
+    printf(" -d '%s'%s\n", completions[i].desc, completions[i].arg ? " -r" : "");
+  }
+  printf("\n# For command completion\n"
          "complete -c await -f -a '(__fish_complete_command)'\n");
 }
 
@@ -183,14 +194,21 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --expect --times --backoff --notify --update\"\n"
+         "    opts=\"");
+  for (size_t i = 0; i < N_COMPLETIONS; i++)
+    printf("%s--%s", i ? " " : "", completions[i].name);
+  printf("\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --exec)\n"
          "            COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
-         "        --status|--interval|--timeout|--cmd-timeout|--retry|--times|--backoff|--name|--service|--expect)\n"
+         "        ");
+  const char *sep = "";
+  for (size_t i = 0; i < N_COMPLETIONS; i++)
+    if (completions[i].arg == 1) { printf("%s--%s", sep, completions[i].name); sep = "|"; }
+  printf(")\n"
          "            return 0\n"
          "            ;;\n"
          "    esac\n"
@@ -214,34 +232,12 @@ void print_autocomplete_zsh() {
          "\n"
          "# Define the completion function for 'await'\n"
          "_await() {\n"
-         "  _arguments -s -S \\\n"
-         "    '--help[Print this help]' \\\n"
-         "    '--version[Display version]' \\\n"
-         "    '--update[Update await to the latest release]' \\\n"
-         "    '--stdout[Print stdout of commands]' \\\n"
-         "    '--no-stderr[Surpress stderr of commands by adding 2>/dev/null to commands]' \\\n"
-         "    '--silent[Do not print spinners and commands]' \\\n"
-         "    '--fail[Wait for commands to fail]' \\\n"
-         "    '--status[Expected status (default: 0)]:status:' \\\n"
-         "    '--any[Terminate if any command returns expected status]' \\\n"
-         "    '--change[Wait for stdout to change and ignore status codes]' \\\n"
-         "    '--diff[Highlight differences between previous and current output]' \\\n"
-         "    '--exec[Run some shell command on success]:command:_command_names' \\\n"
-         "    '--interval[Seconds between rounds of commands (default: 0.2)]:interval:' \\\n"
-         "    '--timeout[Seconds to wait before giving up (default: 0)]:timeout:' \\\n"
-         "    '--cmd-timeout[Seconds per command before killing it]:cmd-timeout:' \\\n"
-         "    '--retry[Max number of attempts before giving up (default: 0 = unlimited)]:retry:' \\\n"
-         "    '--forever[Do not exit ever]' \\\n"
-         "    '--name[Label for the next command]:name:' \\\n"
-         "    '--json[Output results as JSON on exit]' \\\n"
-         "    '--lap[Show last run duration per command in spinner]' \\\n"
-         "    '--expect[Succeed when stdout matches this extended regex (exit status ignored)]:regex:' \\\n"
-         "    '--times[Consecutive successful checks needed (default: 1)]:times:' \\\n"
-         "    '--backoff[Double the interval after each failed check, up to MAX seconds]:max seconds:' \\\n"
-         "    '--notify[Desktop notification when await finishes]' \\\n"
-         "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
-         "    '--service[Create systemd user service (Linux) or launchd agent (macOS) with same parameters and activate it]:service name:'\n"
-         "}\n"
+         "  _arguments -s -S");
+  for (size_t i = 0; i < N_COMPLETIONS; i++)
+    printf(" \\\n    '--%s[%s]%s%s%s'", completions[i].name, completions[i].desc,
+           completions[i].arg == 2 ? ":command:_command_names" : completions[i].arg ? ":" : "",
+           completions[i].arg == 1 ? completions[i].name : "", completions[i].arg == 1 ? ":" : "");
+  printf("\n}\n"
          "\n"
          "# Register the completion function\n"
          "compdef _await await\n");
@@ -1028,24 +1024,6 @@ void parse_args(int argc, char *argv[]) {
           case 'd': args.diff = 1; break;
           case 'v': printf("%s\n", AWAIT_VERSION); exit(0); break;
           case 'h': case '?': help(); break;
-          case 1:
-            if (strcmp(long_options[option_index].name, "autocomplete-fish") == 0) {
-              print_autocomplete_fish();
-              exit(0);
-            }
-            break;
-          case 2:
-            if (strcmp(long_options[option_index].name, "autocomplete-bash") == 0) {
-              print_autocomplete_bash();
-              exit(0);
-            }
-            break;
-          case 3:
-            if (strcmp(long_options[option_index].name, "autocomplete-zsh") == 0) {
-              print_autocomplete_zsh();
-              exit(0);
-            }
-            break;
           case 'E': args.no_stderr = 1; break;
           case 'w':
             args.fail = 1;
