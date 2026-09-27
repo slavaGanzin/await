@@ -272,11 +272,11 @@ EXAMPLES:
 # poll a flaky API politely: 0.2s, 0.4s, 0.8s ... up to a minute between failed checks
   await 'curl -sf https://api.example.com' --backoff 60
 
-# get pinged the moment your site goes down
-  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"'
+# get pinged once per outage: 3 failed checks in a row (without --times, every failed check)
+  await 'curl -sf https://myapp.com' --fail --times 3 --forever --exec 'ntfy send "site is down"'
 
 # ...as a systemd/launchd daemon that survives reboots
-  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send "site is down"' --service site-monitor
+  await 'curl -sf https://myapp.com' --fail --times 3 --forever --exec 'ntfy send "site is down"' --service site-monitor
 
 
 OPTIONS:
