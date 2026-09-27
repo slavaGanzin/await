@@ -8,7 +8,9 @@ import os
 import signal
 import re
 import platform
+import json
 import tempfile
+import statistics
 from typing import Tuple, Optional
 
 
@@ -766,10 +768,12 @@ class TestExecFlag:
         # but the command should complete successfully
 
 
-@pytest.mark.skipif(platform.system() != "Linux", reason="--service is Linux/systemd only")
+@pytest.mark.skipif(platform.system() not in ("Linux", "Darwin"),
+                    reason="--service needs systemd (Linux) or launchd (macOS)")
 class TestService:
-    """--service writes a systemd unit that replays the full command line."""
+    """--service writes a systemd unit (Linux) or launchd agent (macOS) that replays the full command line."""
 
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
     def test_service_unit_keeps_all_flags_and_escapes(self):
         import shutil
         root = tempfile.mkdtemp()
@@ -787,7 +791,7 @@ class TestService:
         shutil.copy("../await", binary)
 
         result = subprocess.run(
-            [binary, "--name", "web", "--json", "--lap", "-i", "0.5",
+            [binary, "--name", "web", "--json", "--lap", "-i", "0.5", "--times", "3", "--backoff", "30",
              'curl -sf "http://x/$HOME" | grep 100%', "--service", "t"],
             env={**os.environ, "HOME": home, "PATH": bindir + ":" + os.environ["PATH"]},
             capture_output=True, text=True, timeout=5,
@@ -798,7 +802,7 @@ class TestService:
             unit = f.read()
         exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
         assert exec_start.startswith(f'ExecStart="{binary}" ')
-        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"'):
+        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"', '--times "3"', '--backoff "30"'):
             assert flag in exec_start
         # systemd expands $ and % and ends the argument at an unescaped quote
         assert '"curl -sf \\"http://x/$$HOME\\" | grep 100%%"' in exec_start
@@ -807,6 +811,214 @@ class TestService:
             verify = subprocess.run(["systemd-analyze", "verify", unit_path],
                                     capture_output=True, text=True)
             assert verify.returncode == 0, verify.stderr
+
+    @staticmethod
+    def _run_service(argv, home, env_extra=None):
+        env = {**os.environ, "HOME": home, "AWAIT_SERVICE_NO_ACTIVATE": "1", **(env_extra or {})}
+        return subprocess.run(["../await", *argv], env=env, capture_output=True, text=True, timeout=5)
+
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
+    def test_service_no_activate_writes_unit_only(self):
+        home = tempfile.mkdtemp()
+        bindir = tempfile.mkdtemp()
+        marker = os.path.join(home, "called")
+        for stub in ("systemctl", "journalctl"):
+            path = os.path.join(bindir, stub)
+            with open(path, "w") as f:
+                f.write(f"#!/bin/sh\ntouch '{marker}'\nexit 0\n")
+            os.chmod(path, 0o755)
+        result = self._run_service(["-f", "true", "--service", "noact"], home,
+                                   {"PATH": bindir + ":" + os.environ["PATH"]})
+        assert result.returncode == 0, result.stderr
+        unit_path = os.path.join(home, ".config/systemd/user/noact.service")
+        with open(unit_path) as f:
+            unit = f.read()
+        assert "Restart=always" in unit
+        assert '--fail  "true"' in unit
+        assert unit_path in result.stdout
+        assert not os.path.exists(marker), "systemctl/journalctl ran despite AWAIT_SERVICE_NO_ACTIVATE"
+
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
+    def test_service_invalid_name_rejected_linux(self):
+        home = tempfile.mkdtemp()
+        for name in ("a/b", "../x", "", "a b", "x@y", "."):
+            result = self._run_service(["true", "--service", name], home)
+            assert result.returncode == 2, (name, result.stderr)
+            assert "invalid --service name" in result.stderr
+        assert not os.path.exists(os.path.join(home, ".config"))
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_launchd_plist(self):
+        import plistlib
+        home = tempfile.mkdtemp()
+        cmd = 'echo "a b" \'c\' && test 1 \\< 2 > /dev/null; echo $HOME \\\\n & wait'
+        args = ["-f", "--name", "it's <web> & co", "-i", "0.5", cmd, "second cmd"]
+        for service_args, rest in (
+            (["--service", "t.x_1-2"], []),
+            (["-S", "t.x_1-2"], []),
+            (["--service=t.x_1-2"], []),
+        ):
+            result = self._run_service([*args, *service_args, *rest], home)
+            assert result.returncode == 0, result.stderr
+            plist_path = os.path.join(home, "Library/LaunchAgents/await.t.x_1-2.plist")
+            assert plist_path in result.stdout
+            lint = subprocess.run(["plutil", "-lint", plist_path], capture_output=True, text=True)
+            assert lint.returncode == 0, lint.stdout + lint.stderr
+            with open(plist_path, "rb") as f:
+                plist = plistlib.load(f)
+            assert plist["ProgramArguments"] == [os.path.realpath("../await"), *args]
+            assert plist["Label"] == "await.t.x_1-2"
+            assert plist["KeepAlive"] is True
+            assert plist["RunAtLoad"] is True
+            log = os.path.join(home, "Library/Logs/await-t.x_1-2.log")
+            assert plist["StandardOutPath"] == log
+            assert plist["StandardErrorPath"] == log
+            assert plist["EnvironmentVariables"]["PATH"] == os.environ["PATH"]
+            assert os.path.isdir(os.path.join(home, "Library/Logs"))
+
+        # -S inside a cluster of short flags, value in the next argument
+        result = self._run_service(["-fS", "c", "true"], home)
+        assert result.returncode == 0, result.stderr
+        with open(os.path.join(home, "Library/LaunchAgents/await.c.plist"), "rb") as f:
+            assert plistlib.load(f)["ProgramArguments"][1:] == ["-f", "true"]
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_invalid_name_rejected_macos(self):
+        home = tempfile.mkdtemp()
+        for name in ("a/b", "../x", "", "a b", "x:y", "."):
+            result = self._run_service(["true", "--service", name], home)
+            assert result.returncode == 2, (name, result.stderr)
+            assert "invalid --service name" in result.stderr
+        assert not os.path.exists(os.path.join(home, "Library"))
+
+    @staticmethod
+    def _service_file(home, name):
+        if platform.system() == "Darwin":
+            return os.path.join(home, f"Library/LaunchAgents/await.{name}.plist")
+        return os.path.join(home, f".config/systemd/user/{name}.service")
+
+    def test_service_rejects_invalid_utf8_argument(self):
+        home = tempfile.mkdtemp()
+        env = {**os.environ, "HOME": home, "AWAIT_SERVICE_NO_ACTIVATE": "1"}
+        result = subprocess.run([b"../await", b"-f", b"echo \xff\xfe", b"--service", b"u"],
+                                env=env, capture_output=True, timeout=5)
+        assert result.returncode == 2, result.stderr
+        assert b"argument 2 contains invalid UTF-8" in result.stderr
+        assert not os.path.exists(self._service_file(home, "u"))
+        # valid multibyte UTF-8 is fine
+        result = self._run_service(["echo 'h\u00e9llo \u2713 \U0001F600'", "--service", "u"], home)
+        assert result.returncode == 0, result.stderr
+        assert os.path.exists(self._service_file(home, "u"))
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_launchd_rejects_control_characters(self):
+        import plistlib
+        home = tempfile.mkdtemp()
+        result = self._run_service(["true", "printf '\x1b[31mred'", "--service", "c"], home)
+        assert result.returncode == 2, result.stderr
+        assert "argument 2 contains a control character" in result.stderr
+        assert not os.path.exists(self._service_file(home, "c"))
+
+        result = self._run_service(["true", "--service", "c"], home,
+                                   {"PATH": os.environ["PATH"] + ":/tmp/\x1b"})
+        assert result.returncode == 2, result.stderr
+        assert "PATH contains a control character" in result.stderr
+        assert not os.path.exists(self._service_file(home, "c"))
+
+        # tab, newline and carriage return are representable and must round-trip
+        cmd = "printf 'a\tb\r\nc'\necho d\r"
+        result = self._run_service([cmd, "--service", "c"], home)
+        assert result.returncode == 0, result.stderr
+        plist_path = self._service_file(home, "c")
+        lint = subprocess.run(["plutil", "-lint", plist_path], capture_output=True, text=True)
+        assert lint.returncode == 0, lint.stdout + lint.stderr
+        with open(plist_path, "rb") as f:
+            assert plistlib.load(f)["ProgramArguments"][1:] == [cmd]
+
+    def test_service_fails_in_deleted_directory(self):
+        home = tempfile.mkdtemp()
+        root = tempfile.mkdtemp()
+        result = subprocess.run(
+            ["sh", "-c", 'mkdir gone && cd gone && rmdir ../gone && exec "$0" true --service gone',
+             os.path.realpath("../await")],
+            cwd=root, env={**os.environ, "HOME": home, "AWAIT_SERVICE_NO_ACTIVATE": "1"},
+            capture_output=True, text=True, timeout=5)
+        assert result.returncode == 1, result.stderr
+        assert "working directory" in result.stderr
+        assert not os.path.exists(self._service_file(home, "gone"))
+
+    @staticmethod
+    def _stub_bin(names):
+        """Stubs that log their name and argv as JSON lines to $STUB_LOG and
+        exit with $STUB_RC_<SUBCOMMAND> (default 0)."""
+        import sys
+        bindir = tempfile.mkdtemp()
+        for name in names:
+            path = os.path.join(bindir, name)
+            with open(path, "w") as f:
+                f.write(f"#!{sys.executable}\n"
+                        "import json, os, sys\n"
+                        "with open(os.environ['STUB_LOG'], 'a') as f:\n"
+                        "    f.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + '\\n')\n"
+                        "sub = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+                        "sys.exit(int(os.environ.get('STUB_RC_' + sub.upper().replace('-', '_'), '0')))\n")
+            os.chmod(path, 0o755)
+        return bindir
+
+    @staticmethod
+    def _stub_calls(log):
+        import json
+        if not os.path.exists(log):
+            return []
+        with open(log) as f:
+            return [json.loads(line) for line in f]
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="launchd is macOS-only")
+    def test_service_launchd_activation(self):
+        bindir = self._stub_bin(["launchctl"])
+        uid = os.getuid()
+        for rcs, want_rc, want_load in (
+            ({}, 0, False),
+            ({"STUB_RC_BOOTSTRAP": "5"}, 0, True),
+            ({"STUB_RC_BOOTSTRAP": "5", "STUB_RC_LOAD": "1"}, 1, True),
+        ):
+            home = tempfile.mkdtemp()
+            log = os.path.join(home, "calls.jsonl")
+            env = {k: v for k, v in os.environ.items() if k != "AWAIT_SERVICE_NO_ACTIVATE"}
+            env.update({"HOME": home, "PATH": bindir + ":" + os.environ["PATH"],
+                        "STUB_LOG": log, "STUB_RC_BOOTOUT": "3", **rcs})
+            result = subprocess.run(["../await", "true", "--service", "act"],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            plist = self._service_file(home, "act")
+            expected = [["launchctl", "bootout", f"gui/{uid}/await.act"],
+                        ["launchctl", "bootstrap", f"gui/{uid}", plist]]
+            if want_load:
+                expected.append(["launchctl", "load", "-w", plist])
+            assert self._stub_calls(log) == expected, (rcs, result.stderr)
+            assert result.returncode == want_rc, (rcs, result.stderr)
+            if want_rc == 0:
+                assert "launchctl bootout gui/$UID/await.act" in result.stdout
+            else:
+                assert "launchctl could not load" in result.stderr
+
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
+    def test_service_systemd_activation(self):
+        bindir = self._stub_bin(["systemctl", "journalctl"])
+        home = tempfile.mkdtemp()
+        log = os.path.join(home, "calls.jsonl")
+        env = {k: v for k, v in os.environ.items() if k != "AWAIT_SERVICE_NO_ACTIVATE"}
+        env.update({"HOME": home, "PATH": bindir + ":" + os.environ["PATH"], "STUB_LOG": log})
+        result = subprocess.run(["../await", "true", "--service", "act"],
+                                env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert self._stub_calls(log) == [
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "cat", "--user", "act.service"],
+            ["systemctl", "enable", "--user", "act.service"],
+            ["systemctl", "restart", "--user", "act.service"],
+            ["journalctl", "--user", "--follow", "--unit", "act.service"],
+        ]
+        assert os.path.exists(self._service_file(home, "act"))
 
 
 class TestNoStderrFlag:
@@ -1084,6 +1296,129 @@ class TestSignalHandling:
                 proc.kill()
 
 
+class TestManPage:
+    """The man page is generated from --help by man/gen-man.sh (at build time)."""
+
+    GEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'man', 'gen-man.sh')
+    AWAIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'await')
+
+    @staticmethod
+    def _gen(binary):
+        r = subprocess.run(['sh', TestManPage.GEN, binary], capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    @pytest.fixture(scope='class')
+    def page(self):
+        return self._gen(self.AWAIT)
+
+    @pytest.fixture(scope='class')
+    def page_file(self, page, tmp_path_factory):
+        path = tmp_path_factory.mktemp('man') / 'await.1'
+        path.write_text(page)
+        return str(path)
+
+    @staticmethod
+    def _help():
+        r = subprocess.run([TestManPage.AWAIT, '--help'], capture_output=True, text=True,
+                           env={**os.environ, 'NO_COLOR': '1'}, timeout=5)
+        return re.sub(r'\x1b\[[0-9;]*m', '', r.stdout)
+
+    @staticmethod
+    def _no_formatter():
+        # CI must check the page for real; locally a missing tool is only a skip
+        if os.environ.get('CI') == 'true':
+            pytest.fail('neither mandoc nor groff is installed (required in CI)')
+        pytest.skip('neither mandoc nor groff is installed')
+
+    @staticmethod
+    def _render(path):
+        """Render to plain text with mandoc or groff; None if neither is installed."""
+        for cmd in (['mandoc', '-Tutf8', '-O', 'width=200', path],
+                    ['groff', '-man', '-Tutf8', '-rLL=200n', path]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                                   env={**os.environ, 'GROFF_NO_SGR': '1'})
+            except FileNotFoundError:
+                continue
+            assert r.returncode == 0, r.stderr
+            return re.sub(r'.\x08', '', r.stdout)
+        return None
+
+    def test_every_help_option_is_documented(self, page):
+        help_opts = re.findall(r'^\s+(--[\w-]+(?:\s+-\w)?)\s*#', self._help(), re.M)
+        assert len(help_opts) > 10
+        # .TP tags: \fB\-\-stdout\fR, \fB\-o\fR
+        tags = re.findall(r'^\.TP\n(.*)$', page, re.M)
+        man_opts = {' '.join(re.findall(r'\\fB(.*?)\\fR', t)).replace('\\-', '-') for t in tags}
+        for opt in help_opts:
+            assert ' '.join(opt.split()) in man_opts, opt
+
+    def test_new_options_are_picked_up(self, tmp_path):
+        """Options are parsed from --help, not hardcoded."""
+        fake = tmp_path / 'await'
+        fake.write_text(
+            "#!/bin/sh\n"
+            "[ \"$1\" = --version ] && { echo 9.9.9; exit 0; }\n"
+            "printf 'await [options] commands\\n\\n# runs things\\n\\n\\nOPTIONS:\\n"
+            "  --help\\t\\t#print this help\\n  --brand-new -N\\t#a flag added later\\n\\n\\n"
+            "NOTES:\\n# set NO_COLOR=1 to disable colors\\n'\n")
+        fake.chmod(0o755)
+        page = self._gen(str(fake))
+        assert '\\fB\\-\\-brand\\-new\\fR, \\fB\\-N\\fR\nA flag added later.' in page
+        assert '"await 9.9.9"' in page
+
+    def test_lint_clean(self, page_file):
+        for cmd in (['mandoc', '-Tlint', '-W', 'warning', page_file],
+                    ['groff', '-man', '-Tutf8', '-ww', '-z', page_file]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            except FileNotFoundError:
+                continue
+            assert r.returncode == 0 and not (r.stdout + r.stderr).strip(), r.stdout + r.stderr
+            return
+        self._no_formatter()
+
+    def test_renders_name_and_examples(self, page_file):
+        text = self._render(page_file)
+        if text is None:
+            self._no_formatter()
+        assert re.search(r'^\s*await - runs list of commands', text, re.M)
+        # backslashes, quotes and hyphens survive as typed, so examples copy-paste
+        assert "await 'curl google.com' --fail" in text
+        assert "'expr \\1 + \\2' --exec 'echo \\3'" in text
+        for section in ('NAME', 'SYNOPSIS', 'DESCRIPTION', 'OPTIONS', 'ENVIRONMENT', 'EXAMPLES'):
+            assert re.search(rf'^{section}$', text, re.M), section
+
+    def test_no_ansi_and_troff_safe(self, page):
+        assert '\x1b' not in page
+        for line in page.splitlines():
+            assert not line.startswith("'"), line
+            if line.startswith('.'):
+                assert re.match(r'\.(\\"|(TH|SH|TP|PP|RS|RE|nf|fi|B|BR)( |$))', line), line
+
+    def test_environment(self, page):
+        env = page.split('.SH ENVIRONMENT', 1)[1].split('.SH ', 1)[0]
+        for var in ('NO_COLOR', 'AWAIT_NO_UPDATE_CHECK', 'AWAIT_AUTO_UPDATE'):
+            assert f'\\fB{var}\\fR' in env, var
+        for hidden in ('AWAIT_UPDATE_FORCE', 'AWAIT_RELEASES_URL', 'AWAIT_UPDATE_TARGET'):
+            assert hidden not in page
+
+    def test_version_matches(self, page):
+        version = subprocess.run([self.AWAIT, '--version'], capture_output=True, text=True).stdout.strip()
+        assert re.search(rf'^\.TH AWAIT 1 "[^"]*" "await {re.escape(version)}"', page, re.M)
+
+    def test_build_page_matches_binary(self):
+        """build/await.1 (made by cmake) is the same page the generator gives today."""
+        built = os.path.join(os.path.dirname(self.AWAIT), 'build', 'await.1')
+        binary = os.path.join(os.path.dirname(self.AWAIT), 'build', 'await')
+        if not (os.path.exists(built) and os.path.exists(binary)):
+            pytest.skip('no build/await.1')
+        strip_date = lambda s: re.sub(r'^(\.TH AWAIT 1) "[^"]*"', r'\1', s, flags=re.M)
+        with open(built) as f:
+            assert strip_date(f.read()) == strip_date(self._gen(binary))
+
+
 class TestAutocompletion:
     """Test autocompletion script generation."""
 
@@ -1141,12 +1476,98 @@ class TestAutocompletion:
         assert complete("await", "--retry", "") == []          # a number, not a filename
         assert "--lap" in complete("await", "--json", "--")    # flags after flags
 
+    def test_zsh_completion_specs(self):
+        """One well-formed _arguments spec per option, in a script zsh parses."""
+        script = subprocess.run(["../await", "--autocomplete-zsh"], capture_output=True, text=True).stdout
+        specs = re.findall(r"^    '(.*)'(?: \\)?$", script, re.M)
+        names = [re.match(r"--([a-z-]+)", spec).group(1) for spec in specs]
+        assert len(names) == len(set(names)) and "exec" in names, names
+        for spec in specs:
+            # --name[description], then :message: for a value or :message:action for --exec
+            assert re.fullmatch(r"--[a-z-]+\[[^'\[\]]+\](:[a-z -]+:(_command_names)?)?", spec), spec
+        assert "'--exec[" in script and ":command:_command_names'" in script
+        assert re.search(r"'--retry\[[^]]*\]:retry:'", script)
+        if __import__("shutil").which("zsh"):
+            check = subprocess.run(["zsh", "-n"], input=script, capture_output=True, text=True)
+            assert check.returncode == 0, check.stderr
+
     @pytest.mark.skipif(not __import__("shutil").which("fish"), reason="fish not installed")
     def test_fish_completion_after_a_flag(self):
         script = subprocess.run(["../await", "--autocomplete-fish"], capture_output=True, text=True).stdout
         result = subprocess.run(["fish", "-c", "source; complete -C'await --json --'"],
                                 input=script, capture_output=True, text=True)
         assert "--lap" in result.stdout
+
+
+class TestHomebrewFormula:
+    """scripts/homebrew-formula.sh turns a release's SHA256SUMS into Formula/await.rb"""
+
+    SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "homebrew-formula.sh")
+    TARGETS = ["aarch64-apple-darwin", "x86_64-apple-darwin",
+               "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"]
+
+    def generate(self, tmp_path, version, sums):
+        (tmp_path / "SHA256SUMS").write_text(sums)
+        out = tmp_path / "await.rb"
+        result = subprocess.run(["bash", self.SCRIPT, version, str(tmp_path / "SHA256SUMS"), str(out)],
+                                capture_output=True, text=True)
+        return result, out
+
+    def test_formula_pins_every_prebuilt_archive(self, tmp_path):
+        version = "9.8.7"
+        shas = {t: format(i + 1, "x") * 64 for i, t in enumerate(self.TARGETS)}
+        sums = "".join(f"{s}  await-{version}-{t}.tar.gz\n" for t, s in shas.items())
+        sums += "f" * 64 + f"  await-{version}-x86_64-unknown-linux-gnu.tar.gz\n"   # not used by brew
+        result, out = self.generate(tmp_path, version, sums)
+        assert result.returncode == 0, result.stderr
+        formula = out.read_text()
+
+        assert "class Await < Formula" in formula
+        assert f'version "{version}"' in formula
+        assert 'license "MIT"' in formula
+        assert "linux-gnu" not in formula and "f" * 64 not in formula
+        base = f"https://github.com/slavaGanzin/await/releases/download/{version}"
+        lines = formula.splitlines()
+        for target, sha in shas.items():
+            url = f'url "{base}/await-{version}-{target}.tar.gz"'
+            i = next(n for n, line in enumerate(lines) if line.strip() == url)
+            assert lines[i + 1].strip() == f'sha256 "{sha}"'   # each url carries its own checksum
+        mac, linux = formula.index("on_macos do"), formula.index("on_linux do")
+        assert mac < formula.index("aarch64-apple-darwin") < formula.index("x86_64-apple-darwin") < linux
+        assert linux < formula.index("aarch64-unknown-linux-musl")
+
+        assert 'bin.install "await"' in formula
+        assert 'bash_completion.install "await.bash" => "await"' in formula
+        assert 'fish_completion.install "await.fish"' in formula
+        assert 'zsh_completion/"_await"' in formula
+        assert 'shell_output("#{bin}/await --version").strip' in formula
+
+        if __import__("shutil").which("ruby"):
+            check = subprocess.run(["ruby", "-c", str(out)], capture_output=True, text=True)
+            assert check.returncode == 0, check.stderr
+
+    def test_check_catches_stale_pins(self, tmp_path):
+        version = "1.2.3"
+        sums = "".join(f"{format(i + 1, 'x') * 64}  await-{version}-{t}.tar.gz\n" for i, t in enumerate(self.TARGETS))
+        result, out = self.generate(tmp_path, version, sums)
+        assert result.returncode == 0, result.stderr
+        check = lambda: subprocess.run(["bash", self.SCRIPT, "--check", str(tmp_path / "SHA256SUMS"), str(out)],
+                                       capture_output=True, text=True)
+        assert check().returncode == 0, check().stdout
+
+        # the archives were re-published: one checksum changed
+        (tmp_path / "SHA256SUMS").write_text(sums.replace("2" * 64, "e" * 64))
+        stale = check()
+        assert stale.returncode == 1
+        assert f"await-{version}-x86_64-apple-darwin.tar.gz pins {'2' * 64}" in stale.stdout
+        assert "aarch64-apple-darwin" not in stale.stdout
+
+    def test_missing_archive_is_an_error(self, tmp_path):
+        sums = "a" * 64 + "  await-1.0.0-aarch64-apple-darwin.tar.gz\n"
+        result, out = self.generate(tmp_path, "1.0.0", sums)
+        assert result.returncode != 0
+        assert "x86_64-apple-darwin" in result.stderr
+        assert not out.exists()
 
 
 class TestNoColor:
@@ -1162,6 +1583,375 @@ class TestNoColor:
         assert result.returncode == 1
         assert "hi" in result.stderr
         assert not re.search(r"\x1b\[[0-9;]*m", result.stderr)
+
+
+# the native notifiers --notify tries, in order, on this platform
+NOTIFY_PLATFORM = "Windows" if platform.system().startswith(("MSYS", "MINGW", "CYGWIN")) else platform.system()
+NATIVE_NOTIFIERS = {"Darwin": ["terminal-notifier", "osascript"],
+                    "Windows": ["powershell.exe"]}.get(NOTIFY_PLATFORM, ["notify-send", "gdbus", "kdialog"])
+linux_only = pytest.mark.skipif(NOTIFY_PLATFORM != "Linux", reason="Linux notifiers")
+macos_only = pytest.mark.skipif(NOTIFY_PLATFORM != "Darwin", reason="macOS notifiers")
+
+
+class TestNotify:
+    """--notify: terminal escape sequences, native notifiers, bell."""
+
+    STUBS = ("notify-send", "gdbus", "kdialog", "osascript", "terminal-notifier", "powershell.exe")
+    # stubs log their argv as one JSON line (powershell.exe: then the title and body,
+    # which await passes it in the environment); STUB_EXIT_<name> / STUB_SLEEP_<name> steer them
+    STUB = """#!/usr/bin/env python3
+import json, os, sys, time
+base = os.path.basename(sys.argv[0])
+name = base.replace("-", "_").replace(".", "_")
+extra = [os.environ.get("AWAIT_NOTIFY_TITLE", ""), os.environ.get("AWAIT_NOTIFY_BODY", "")] if base == "powershell.exe" else []
+with open(os.environ["NOTIFY_LOG"], "a") as f:
+    f.write(json.dumps([base] + sys.argv[1:] + extra) + "\\n")
+time.sleep(float(os.environ.get("STUB_SLEEP_" + name, "0")))
+sys.exit(int(os.environ.get("STUB_EXIT_" + name, "0")))
+"""
+
+    @pytest.fixture
+    def notify(self, tmp_path):
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        for stub in self.STUBS:
+            (bindir / stub).write_text(self.STUB)
+            (bindir / stub).chmod(0o755)
+        log, tty = tmp_path / "calls.log", tmp_path / "tty"
+        tty.write_bytes(b"")
+        await_bin = os.path.abspath("../await")
+
+        def run(args, env=None, desktop=True, timeout=10):
+            base = {k: v for k, v in os.environ.items()
+                    if k not in ("TERM_PROGRAM", "LC_TERMINAL", "KITTY_WINDOW_ID", "WT_SESSION", "TMUX",
+                                 "SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT", "DISPLAY", "WAYLAND_DISPLAY",
+                                 "DBUS_SESSION_BUS_ADDRESS")}
+            base.update(PATH=f"{bindir}:{os.environ['PATH']}", TERM="xterm-256color", NOTIFY_LOG=str(log),
+                        AWAIT_NOTIFY_TTY=str(tty), AWAIT_NO_UPDATE_CHECK="1")
+            if desktop:
+                base["DISPLAY"] = ":0"
+            base.update(env or {})
+            start = time.time()
+            result = subprocess.run([await_bin] + args, env=base, cwd=tmp_path, capture_output=True,
+                                    timeout=timeout)
+            result.seconds = time.time() - start
+            import json
+            result.calls = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+            result.tty = tty.read_bytes()
+            return result
+        run.tmp = tmp_path
+        return run
+
+    @staticmethod
+    def text(call):
+        """(title, body) a stub was given, whichever notifier it is."""
+        name = call[0]
+        if name == "terminal-notifier":
+            return call[2], call[4]
+        if name == "osascript":
+            return call[7], call[8]
+        if name == "gdbus":  # GVariant string literals
+            return tuple(json.loads(a) for a in call[12:14])
+        if name == "kdialog":
+            return call[2], call[4]
+        if name == "powershell.exe":
+            return call[-2], call[-1]
+        return call[3], call[4]  # notify-send
+
+    @staticmethod
+    def stub_env(what, names, value):
+        return {f"STUB_{what}_" + n.replace("-", "_").replace(".", "_"): value for n in names}
+
+    def only_call(self, result, name=None):
+        """the one notifier call, the platform's first choice unless named; its (title, body)"""
+        assert [c[0] for c in result.calls] == [name or NATIVE_NOTIFIERS[0]], result.calls
+        return self.text(result.calls[0])
+
+    def test_without_notify_nothing_happens(self, notify):
+        r = notify(["-V", "true"])
+        assert r.returncode == 0
+        assert r.calls == [] and r.tty == b""
+
+    def test_success(self, notify):
+        r = notify(["--notify", "-V", "true", "echo hi"])
+        assert r.returncode == 0
+        title, body = self.only_call(r)
+        assert title == "await"
+        assert re.fullmatch(r"done in \d+\.\ds: 2/2 commands succeeded", body), body
+        assert r.tty == b""
+
+    def test_notifies_without_silent_too(self, notify):
+        r = notify(["--notify", "true"])
+        assert r.returncode == 0
+        assert self.only_call(r)[1].startswith("done in ")
+
+    def test_timeout(self, notify):
+        r = notify(["--notify", "-V", "-T", "1", "true", "exit 3"])
+        assert r.returncode == 1
+        body = self.only_call(r)[1]
+        assert re.fullmatch(r"timed out after 1\.\ds: 1/2 commands succeeded; exit 3 exited 3", body), body
+
+    def test_failure_single_command(self, notify):
+        r = notify(["--notify", "-V", "-r", "1", "exit 127"])
+        assert r.returncode == 1
+        assert self.only_call(r)[1] == "gave up after 1 attempts: exit 127 exited 127 (command not found)"
+
+    def test_exec(self, notify):
+        r = notify(["--notify", "-V", "true", "--exec", "exit 4"])
+        assert r.returncode == 4
+        body = self.only_call(r)[1]
+        assert body.startswith("done in ") and body.endswith("true exited 0; --exec finished (exit 4)"), body
+
+    def test_name_in_title(self, notify):
+        r = notify(["--notify", "-V", "-n", "web", "true"])
+        assert r.returncode == 0
+        title, body = self.only_call(r)
+        assert title == "await: web"
+        assert body.endswith(": web exited 0")
+
+    def test_fail_mode(self, notify):
+        r = notify(["--notify", "-V", "-f", "false", "exit 2"])
+        assert r.returncode == 0
+        assert self.only_call(r)[1].endswith("2/2 commands failed")
+
+    def test_bell_when_everything_fails(self, notify):
+        r = notify(["--notify", "-V", "false", "-r", "1"], env=self.stub_env("EXIT", self.STUBS, "1"))
+        assert r.returncode == 1
+        assert [c[0] for c in r.calls] == NATIVE_NOTIFIERS
+        assert r.tty == b"\a"
+
+    @linux_only
+    def test_notify_send_arguments(self, notify):
+        r = notify(["--notify", "-V", "true"])
+        assert r.calls[0][:4] == ["notify-send", "-a", "await", "await"] and len(r.calls[0]) == 5
+
+    @linux_only
+    def test_falls_back_to_gdbus(self, notify):
+        r = notify(["--notify", "-V", "-n", 'say "hi"', "true"], env={"STUB_EXIT_notify_send": "1"})
+        assert r.returncode == 0
+        assert [c[0] for c in r.calls] == ["notify-send", "gdbus"]
+        gdbus = r.calls[1]
+        assert gdbus[1:10] == ["call", "--session", "--dest", "org.freedesktop.Notifications",
+                               "--object-path", "/org/freedesktop/Notifications",
+                               "--method", "org.freedesktop.Notifications.Notify", "await"]
+        assert gdbus[10:12] == ["0", "''"]
+        # title and body as GVariant string literals
+        assert gdbus[12] == '"await: say \\"hi\\""'
+        assert gdbus[13].startswith('"done in ') and gdbus[13].endswith('"')
+        assert gdbus[14:] == ["[]", "{}", "5000"]
+        assert r.tty == b""
+
+    @linux_only
+    def test_falls_back_to_kdialog(self, notify):
+        r = notify(["--notify", "-V", "true"], env={"STUB_EXIT_notify_send": "1", "STUB_EXIT_gdbus": "1"})
+        assert r.returncode == 0
+        assert [c[0] for c in r.calls] == ["notify-send", "gdbus", "kdialog"]
+        kdialog = r.calls[2]
+        assert kdialog[1:4] == ["--title", "await", "--passivepopup"]
+        assert kdialog[4].startswith("done in ") and kdialog[5] == "5"
+        assert r.tty == b""
+
+    @linux_only
+    def test_bell_without_desktop(self, notify):
+        r = notify(["--notify", "-V", "true"], desktop=False)
+        assert r.returncode == 0
+        assert r.calls == [] and r.tty == b"\a"
+
+    @linux_only
+    def test_desktop_via_wayland_or_dbus(self, notify):
+        for var in ("WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
+            r = notify(["--notify", "-V", "true"], desktop=False, env={var: "x"})
+            assert r.calls[-1][0] == "notify-send"
+
+    @pytest.mark.parametrize("env,sequence", [
+        ({"TERM_PROGRAM": "WezTerm"}, b"\x1b]9;await: done in "),
+        ({"TERM_PROGRAM": "iTerm.app"}, b"\x1b]9;await: done in "),
+        ({"LC_TERMINAL": "iTerm2"}, b"\x1b]9;await: done in "),
+        ({"TERM_PROGRAM": "vscode"}, b"\x1b]9;await: done in "),
+        ({"WT_SESSION": "1"}, b"\x1b]9;await: done in "),
+        ({"TERM_PROGRAM": "ghostty"}, b"\x1b]777;notify;await;done in "),
+        ({"TERM": "foot-extra"}, b"\x1b]777;notify;await;done in "),
+        ({"KITTY_WINDOW_ID": "1"}, b"\x1b]99;i=await:d=0;await\x1b\\\x1b]99;i=await:p=body;done in "),
+        ({"TERM": "xterm-kitty"}, b"\x1b]99;i=await:d=0;await\x1b\\\x1b]99;i=await:p=body;done in "),
+    ])
+    def test_terminal_sequences(self, notify, env, sequence):
+        r = notify(["--notify", "-V", "true"], env=env)
+        assert r.returncode == 0
+        assert r.tty.startswith(sequence), r.tty
+        assert r.tty.endswith(b"\x1b\\" if b"]99;" in sequence else b"\a")
+        assert r.tty.count(b"\a") <= 1
+        assert r.calls == []
+
+    def test_osc_777_fields_have_no_extra_semicolons(self, notify):
+        r = notify(["--notify", "-V", "-n", "a;b", "true", "--exec", "true"], env={"TERM_PROGRAM": "ghostty"})
+        assert r.tty.startswith(b"\x1b]777;notify;await: a,b;done in ")
+        assert r.tty.count(b";") == 3
+
+    def test_tmux_passthrough(self, notify):
+        r = notify(["--notify", "-V", "true"], env={"TERM_PROGRAM": "WezTerm", "TMUX": "/tmp/tmux-0/default,1,0"})
+        assert r.returncode == 0
+        assert r.tty.startswith(b"\x1bPtmux;\x1b\x1b]9;await: done in ")
+        assert r.tty.endswith(b"\a\x1b\\")
+        assert r.tty.count(b"\x1b") == 4  # DCS, the doubled ESC, and the one ending the passthrough
+        assert r.calls == []
+
+    def test_ssh_uses_the_terminal_only(self, notify):
+        for var in ("SSH_CONNECTION", "SSH_TTY"):
+            r = notify(["--notify", "-V", "true"], env={var: "10.0.0.1 1 10.0.0.2 22"})
+            assert r.returncode == 0
+            assert re.fullmatch(rb"\x1b\]9;await: done in [^\x07\x1b]*\x07\x07", r.tty), r.tty
+            assert r.calls == []
+            (notify.tmp / "tty").write_bytes(b"")
+
+    def test_ssh_known_terminal(self, notify):
+        r = notify(["--notify", "-V", "true"], env={"SSH_TTY": "/dev/pts/1", "KITTY_WINDOW_ID": "3"})
+        assert r.tty.startswith(b"\x1b]99;") and b"\a" not in r.tty
+        assert r.calls == []
+
+    def assert_clean(self, text):
+        text.encode("utf-8")  # valid UTF-8: no surrogate-escaped bytes
+        assert not re.search(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]", text), repr(text)
+
+    def assert_nothing_ran(self, notify):
+        import pathlib
+        for d in (notify.tmp, pathlib.Path(".")):
+            assert not any(p.name.startswith("pwned") for p in d.iterdir())
+
+    def test_hostile_name(self, notify):
+        name = (b"$(touch pwned) `touch pwned2` 'q' \"dq\" \x1b]0;evil\x07\x1b[31m \xff\xfe\xc3(\n\n"
+                + "\u2603".encode() * 3000)
+        r = notify([b"--notify", b"-V", b"-n", name, b"true"])
+        assert r.returncode == 0
+        self.assert_nothing_ran(notify)
+        title, body = self.only_call(r)
+        for text in (title, body):
+            self.assert_clean(text)
+        label = "$(touch pwned) `touch pwned2` 'q' \"dq\" ]0;evil [31m ( \u2603"
+        assert title.startswith("await: " + label) and title.endswith("\u2603\u2026")
+        assert len(title.encode()) <= len("await: ") + 60
+        assert re.fullmatch(r"done in \d\.\ds: " + re.escape(label) + "\u2603*\u2026 exited 0", body), body
+        assert len(body.encode()) <= 200
+
+    def test_hostile_command(self, notify):
+        cmd = b"true '$(touch pwned3) \x1b]9;x\x07\x9b \xe2\x80\xae\xc0\xaf\xed\xa0\x80a\xc3\xa9 " + b"y" * 10000 + b"'"
+        r = notify([b"--notify", b"-V", b"-r", b"1", cmd, b"exit 1"],
+                   env=self.stub_env("EXIT", NATIVE_NOTIFIERS[:1], "1"))
+        assert r.returncode == 1
+        self.assert_nothing_ran(notify)
+        assert [c[0] for c in r.calls] == NATIVE_NOTIFIERS[:2]
+        body = self.text(r.calls[0])[1]
+        self.assert_clean(body)
+        assert body.startswith("gave up after 1 attempts: 1/2 commands succeeded; exit 1 exited 1")
+        # the fallback, where there is one, gets the same text (gdbus: as a GVariant literal)
+        if len(r.calls) > 1:
+            assert self.text(r.calls[1])[1] == body
+        if len(r.calls) > 1 and r.calls[1][0] == "gdbus":
+            assert r.calls[1][13] == '"' + body + '"'
+        r = notify([b"--notify", b"-V", cmd])
+        body = self.text(r.calls[-1])[1]
+        self.assert_clean(body)
+        assert re.fullmatch(r"done in \d\.\ds: true '\$\(touch pwned3\) \]9;x aé y+\u2026 exited 0", body), body
+        assert len(body.encode()) <= 200
+        self.assert_nothing_ran(notify)
+
+    def test_hung_notifier_does_not_delay_exit(self, notify):
+        r = notify(["--notify", "-V", "exit 3", "-r", "1"], env=self.stub_env("SLEEP", NATIVE_NOTIFIERS[:1], "30"))
+        assert r.returncode == 1
+        assert r.seconds < 3.5
+        # the 2s budget is spent: straight to the bell
+        assert [c[0] for c in r.calls] == NATIVE_NOTIFIERS[:1]
+        assert r.tty == b"\a"
+
+    def test_hung_notifier_keeps_exec_status(self, notify):
+        r = notify(["--notify", "-V", "true", "--exec", "exit 5"], env=self.stub_env("SLEEP", NATIVE_NOTIFIERS[:1], "30"))
+        assert r.returncode == 5 and r.seconds < 3.5
+
+    def test_forever_exec_notifies_each_run(self, notify):
+        runs = notify.tmp / "runs"
+        r = notify(["--notify", "-V", "-F", "-T", "1.5", "true", "--exec", f"echo x >> {runs}"])
+        assert r.returncode == 1
+        bodies = [self.text(c)[1] for c in r.calls]
+        execs = [b for b in bodies if b == "true exited 0; --exec finished (exit 0)"]
+        assert bodies[-1].startswith("timed out after 1.")
+        assert len(execs) == len(bodies) - 1
+        count = len(runs.read_text().splitlines())
+        assert count >= 2 and len(execs) in (count, count - 1), (count, bodies)
+
+    @pytest.mark.skipif(NOTIFY_PLATFORM == "Windows", reason="MSYS ptys don't support tcflow")
+    def test_stopped_terminal_does_not_delay_exit(self, notify):
+        import pty, fcntl, termios
+        master, slave = pty.openpty()
+        try:
+            # output stopped (like Ctrl-S) and the buffer full: a write would block
+            termios.tcflow(slave, termios.TCOOFF)
+            fcntl.fcntl(slave, fcntl.F_SETFL, fcntl.fcntl(slave, fcntl.F_GETFL) | os.O_NONBLOCK)
+            for _ in range(100000):
+                try:
+                    os.write(slave, b"x" * 1024)
+                except BlockingIOError:
+                    break
+            r = notify(["--notify", "-V", "exit 3", "-r", "1"],
+                       env={"TERM_PROGRAM": "WezTerm", "AWAIT_NOTIFY_TTY": os.ttyname(slave)})
+            assert r.returncode == 1
+            assert r.seconds < 3.5
+            assert r.calls == []  # the terminal used up the budget
+        finally:
+            os.close(slave)
+            os.close(master)
+
+    def test_fifo_without_reader_is_no_terminal(self, notify):
+        fifo = notify.tmp / "fifo"
+        os.mkfifo(fifo)
+        r = notify(["--notify", "-V", "true"], env={"TERM_PROGRAM": "WezTerm", "AWAIT_NOTIFY_TTY": str(fifo)})
+        assert r.returncode == 0 and r.seconds < 3
+        assert [c[0] for c in r.calls] == NATIVE_NOTIFIERS[:1]
+
+    def test_cmd_timeout_note_only_when_killed(self, notify):
+        r = notify(["--notify", "-V", "-t", "5", "-r", "1", "exit 124"])
+        assert self.only_call(r)[1] == "gave up after 1 attempts: exit 124 exited 124"
+        r = notify(["--notify", "-V", "-t", "1", "-r", "1", "sleep 5"])
+        assert self.text(r.calls[-1])[1] == "gave up after 1 attempts: sleep 5 exited 124 (--cmd-timeout)"
+        # the same note in the --timeout report
+        r = notify(["-T", "1.5", "-t", "5", "exit 124"], env={"NO_COLOR": "1"})
+        assert b"'exit 124': last exit 124\n" in r.stderr
+        r = notify(["-T", "1.5", "-t", "1", "sleep 5"], env={"NO_COLOR": "1"})
+        assert b"'sleep 5': last exit 124 (--cmd-timeout)\n" in r.stderr
+
+    @linux_only  # --service is systemd-only
+    def test_service_keeps_notify(self, notify):
+        home = notify.tmp / "home"
+        home.mkdir()
+        for stub in ("systemctl", "journalctl"):
+            (notify.tmp / "bin" / stub).write_text("#!/bin/sh\nexit 0\n")
+            (notify.tmp / "bin" / stub).chmod(0o755)
+        r = notify(["--notify", "true", "--service", "t"], env={"HOME": str(home)})
+        assert r.returncode == 0
+        unit = (home / ".config/systemd/user/t.service").read_text()
+        exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
+        assert "--notify" in exec_start and "--update" not in exec_start
+
+    @macos_only
+    def test_macos_terminal_notifier(self, notify):
+        # no desktop session variables needed on macOS
+        r = notify(["--notify", "-V", "-n", "web", "true"], desktop=False)
+        assert r.returncode == 0
+        assert self.only_call(r, "terminal-notifier") == ("await: web", r.calls[0][4])
+        assert r.calls[0][1:4] == ["-title", "await: web", "-message"] and len(r.calls[0]) == 5
+        assert r.calls[0][4].startswith("done in ")
+
+    @macos_only
+    def test_macos_osascript(self, notify):
+        r = notify(["--notify", "-V", "-n", 'x" & (do shell script "touch pwned") & "', "true"],
+                   desktop=False, env={"STUB_EXIT_terminal_notifier": "1"})
+        assert r.returncode == 0
+        assert [c[0] for c in r.calls] == ["terminal-notifier", "osascript"]
+        assert r.calls[1][1:7] == ["-e", "on run argv",
+                                   "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+                                   "-e", "end run"]
+        assert r.calls[1][7] == 'await: x" & (do shell script "touch pwned") & "'
+        assert r.calls[1][8].startswith("done in ")
+        assert len(r.calls[1]) == 9
+        assert r.tty == b""
 
 
 class TestJson:
@@ -1554,17 +2344,22 @@ class FakeReleases:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/releases"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True):
+    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True, extra_files=None, name="await"):
         """Publish `version` with an archive for `target` whose `await` is a stand-in
-        that answers --version (or `binary`, a shell script)."""
+        that answers --version (or `binary`, a shell script), plus `extra_files`
+        ({name: text}) next to it; `name` is the binary's name in the archive."""
         import hashlib, io, tarfile
         self.latest = version
         script = binary or f"#!/bin/sh\necho {version}\n"
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            info = tarfile.TarInfo("await")
+            info = tarfile.TarInfo(name)
             info.size, info.mode = len(script), 0o644   # like the old archives: not executable
             tar.addfile(info, io.BytesIO(script.encode()))
+            for extra, text in (extra_files or {}).items():
+                info = tarfile.TarInfo(extra)
+                info.size, info.mode = len(text.encode()), 0o644
+                tar.addfile(info, io.BytesIO(text.encode()))
         archive = f"await-{version}-{target}.tar.gz"
         self.files[f"/releases/download/{version}/{archive}"] = buf.getvalue()
         if sums:
@@ -1778,6 +2573,57 @@ class TestSelfUpdate:
         assert returncode == 0, err
         assert running.wait(timeout=10) == 0
 
+    def man_page(self, text=None):
+        """<prefix>/share/man/man1/await.1 next to <prefix>/bin/await; `text` creates it."""
+        path = os.path.join(self.dir, "share", "man", "man1", "await.1")
+        if text is not None:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        return path
+
+    def test_installed_man_page_is_refreshed(self):
+        page = self.man_page(".TH AWAIT 1 old\n")
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert open(page).read() == ".TH AWAIT 1 new\n"
+        assert os.listdir(os.path.dirname(page)) == ["await.1"]       # no temp file left behind
+
+    def test_man_page_is_not_created(self):
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert not os.path.exists(os.path.join(self.dir, "share"))
+
+    def test_man_page_symlink_is_not_written_through(self):
+        target = os.path.join(self.dir, "elsewhere.1")
+        with open(target, "w") as f:
+            f.write("mine\n")
+        page = self.man_page()
+        os.makedirs(os.path.dirname(page))
+        os.symlink(target, page)
+        if not os.path.islink(page):
+            pytest.skip("no real symlinks here (MSYS copies the target by default)")
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert os.path.islink(page) and open(target).read() == "mine\n"
+
+    def test_read_only_man_page_does_not_fail_the_update(self):
+        if os.geteuid() == 0:
+            pytest.skip("root can write anywhere")
+        page = self.man_page(".TH AWAIT 1 old\n")
+        os.chmod(page, 0o444)
+        os.chmod(os.path.dirname(page), 0o555)
+        self.releases.publish("99.0.0", extra_files={"await.1": ".TH AWAIT 1 new\n"})
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert "couldn't update the man page" in err
+        assert open(page).read() == ".TH AWAIT 1 old\n"
+
     def test_already_up_to_date(self):
         self.releases.publish(self.version)
         returncode, err = self.update()
@@ -1821,6 +2667,14 @@ class TestSelfUpdate:
         assert "has no test-target build" in err
         self.assert_untouched()
 
+    def test_windows_archive_with_await_exe(self):
+        """The Windows (MSYS2) archive holds await.exe instead of await."""
+        self.releases.publish("99.0.0", name="await.exe")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert self.installed_version(self.binary + ".old") == self.version
+
     def test_forced_update_reinstalls_the_same_or_an_older_release(self):
         """AWAIT_UPDATE_FORCE (CI's end-to-end check) installs the latest release
         even when it isn't newer, through the same verified path."""
@@ -1856,6 +2710,8 @@ class TestSelfUpdate:
         self.assert_untouched()
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can write anywhere")
+    @pytest.mark.skipif(platform.system().startswith(("MSYS", "CYGWIN")),
+                        reason="chmod can't make a directory read-only on Windows")
     def test_unwritable_install_suggests_sudo(self):
         self.releases.publish("99.0.0")
         os.chmod(self.bin_dir, 0o555)
@@ -1882,12 +2738,23 @@ class TestSelfUpdate:
         static musl build on Linux)."""
         machine = platform.machine().lower()
         arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
-        target = f"{arch}-apple-darwin" if platform.system() == "Darwin" else f"{arch}-unknown-linux-musl"
+        if platform.system() == "Darwin":
+            target = f"{arch}-apple-darwin"
+        elif platform.system().startswith(("MSYS", "CYGWIN")):
+            target = "x86_64-pc-windows-msys"
+        else:
+            target = f"{arch}-unknown-linux-musl"
         self.releases.publish("99.0.0", target=target)
         env = {k: v for k, v in self.env.items() if k != "AWAIT_UPDATE_TARGET"}
         returncode, err = self.update(env=env)
         assert returncode == 0, err
         assert f"/releases/download/99.0.0/await-99.0.0-{target}.tar.gz" in self.releases.requests
+        if platform.system().startswith("MSYS"):
+            # Git Bash (and MSYS2's MinGW shells) report MINGW64_NT-... from uname
+            import shutil
+            shutil.copy("../await", self.binary)
+            returncode, err = self.update(env={**env, "MSYSTEM": "MINGW64"})
+            assert returncode == 0, err
 
     def test_auto_update_in_the_background(self):
         """AWAIT_AUTO_UPDATE=1: an interactive run's background check installs the update."""
@@ -1899,8 +2766,13 @@ class TestSelfUpdate:
         os.close(slave)
         assert proc.wait(timeout=5) == 0
         os.close(master)
+        # wait for the update to finish (backup in place, lock and temp dir gone)
+        # before running the binary: exec'ing it mid-swap is a race on Windows
+        import glob
+        finished = lambda: (os.path.exists(self.binary + ".old")
+                            and not glob.glob(os.path.join(os.path.dirname(self.binary), ".await-update*")))
         deadline = time.time() + 10
-        while time.time() < deadline and self.installed_version() != "99.0.0":
+        while time.time() < deadline and not finished():
             time.sleep(0.1)
         assert self.installed_version() == "99.0.0"
 
@@ -2016,6 +2888,155 @@ class TestSelfUpdate:
         assert self.wait_for(lambda: not os.path.exists(error))
 
 
+class TestExpect:
+    """--expect REGEX: a command succeeds when its stdout matches, whatever it exits with."""
+
+    # prints count 1, count 2 ... up to count <top>, then keeps printing that:
+    # await samples each command's latest result, so a match lasting a single
+    # run could be missed on a loaded machine; the final output must be stable
+    COUNTER = ('n=$(cat {f} 2>/dev/null || echo 0); [ "$n" -lt {top} ] && n=$((n+1)); '
+               'echo $n > {f}; echo count $n')
+
+    def run(self, *argv, timeout=10):
+        return subprocess.run(["../await", *argv], capture_output=True, text=True, timeout=timeout)
+
+    def counter(self, top):
+        fd, path = tempfile.mkstemp(dir=TMPDIR)
+        os.close(fd)
+        os.unlink(path)
+        return path, self.COUNTER.format(f=path, top=top)
+
+    def test_matches_on_first_try(self):
+        r = self.run('echo \'{"status": "up"}\'', "--expect", '"status": *"up"', "-V")
+        assert r.returncode == 0, r.stderr
+
+    def test_waits_until_output_matches(self):
+        path, cmd = self.counter(3)
+        try:
+            r = self.run(cmd, "-x", "count 3$", "-i", "0.05", "-T", "5", "--json")
+            assert r.returncode == 0, r.stderr
+            import json
+            assert json.loads(r.stdout.strip())["commands"][0]["output"] == "count 3\n"
+        finally:
+            os.unlink(path)
+
+    def test_nonzero_exit_with_match_succeeds(self):
+        r = self.run("echo ready; exit 3", "-x", "ready", "-T", "2", "-V")
+        assert r.returncode == 0, r.stderr
+
+    def test_zero_exit_without_match_keeps_waiting(self):
+        r = self.run("echo nope", "-x", "ready", "-i", "0.05", "-T", "0.5")
+        assert r.returncode == 1
+        assert "did not match --expect" in r.stderr
+
+    def test_fail_waits_for_output_not_to_match(self):
+        assert self.run("echo nope; exit 1", "-x", "ready", "-f", "-T", "2", "-V").returncode == 0
+        assert self.run("echo ready", "-x", "ready", "-f", "-i", "0.05", "-T", "0.5", "-V").returncode == 1
+
+    def test_all_commands_must_match(self):
+        assert self.run("echo a1", "echo a2", "-x", "^a", "-T", "2", "-V").returncode == 0
+        assert self.run("echo a", "echo b", "-x", "^a", "-i", "0.05", "-T", "0.5", "-V").returncode == 1
+
+    def test_any_needs_one_match(self):
+        assert self.run("echo a", "echo b", "-x", "^a", "--any", "-T", "2", "-V").returncode == 0
+
+    def test_invalid_regex_exits_2(self):
+        r = self.run("echo x", "--expect", "(")
+        assert r.returncode == 2
+        assert "invalid --expect regex" in r.stderr
+
+    def test_stderr_is_not_matched(self):
+        r = self.run("echo ready >&2", "-x", "ready", "-i", "0.05", "-T", "0.5", "-V")
+        assert r.returncode == 1
+
+    def test_json_status_reflects_match(self):
+        import json
+        r = self.run("echo ready; exit 5", "-x", "ready", "--json")
+        assert r.returncode == 0, r.stderr
+        data = json.loads(r.stdout.strip())
+        assert data["success"] is True
+        assert data["commands"][0]["status"] == 0
+        r = self.run("echo nope", "-x", "ready", "--json", "-i", "0.05", "-T", "0.5")
+        assert r.returncode == 1
+        data = json.loads(r.stdout.strip())
+        assert data["success"] is False
+        assert data["commands"][0]["status"] == 1
+
+    def test_cmd_timeout_is_unsuccessful(self):
+        import json
+        r = self.run("echo ready; sleep 5", "-x", "ready", "-t", "1", "-r", "1", "--json")
+        assert r.returncode == 1
+        assert json.loads(r.stdout.strip())["commands"][0]["status"] == 124
+
+    def test_change_counts_only_changes_to_matching_output(self):
+        import json
+        # count 1 (baseline) -> count 2 (a change, but no match): keeps waiting
+        path, cmd = self.counter(2)
+        try:
+            r = self.run(cmd, "-c", "-x", "count [3-9]", "-i", "0.05", "-T", "1.5", "-V")
+            assert r.returncode == 1
+        finally:
+            os.unlink(path)
+        # ... -> count 3 (a change to matching output): done
+        path, cmd = self.counter(3)
+        try:
+            r = self.run(cmd, "-c", "-x", "count [3-9]", "-i", "0.05", "-T", "5", "--json")
+            assert r.returncode == 0, r.stderr
+            assert json.loads(r.stdout.strip())["commands"][0]["output"] == "count 3\n"
+        finally:
+            os.unlink(path)
+
+    def test_exec_sees_matching_output(self):
+        r = self.run("echo ready; exit 1", "-x", "ready", "--exec", "echo got \\1", "-V")
+        assert r.returncode == 0, r.stderr
+        assert "got ready" in r.stdout
+
+    def test_timed_out_run_never_completes_fail(self):
+        # the run is killed before printing, so it neither matched nor didn't
+        r = self.run("sleep 5; echo X", "-x", "X", "--fail", "-t", "1", "-T", "2.5", "-V")
+        assert r.returncode == 1
+
+    def test_timed_out_run_never_completes_match(self):
+        r = self.run("echo X; sleep 5", "-x", "Y", "--fail", "-t", "1", "-T", "2.5", "-V")
+        assert r.returncode == 1
+        r = self.run("echo X; sleep 5", "-x", "X", "-t", "1", "-T", "2.5", "-V")
+        assert r.returncode == 1
+
+    def test_nul_in_output_does_not_hide_match(self):
+        r = self.run("printf 'a\\0ready'", "-x", "ready", "-T", "2", "-V")
+        assert r.returncode == 0, r.stderr
+        r = self.run("printf 'a\\0b'", "-x", "ready", "-i", "0.05", "-T", "0.5", "-V")
+        assert r.returncode == 1
+
+    def test_no_command_not_found_hint_when_output_matched(self):
+        r = self.run("echo ready; exit 127", "-x", "ready", "-T", "2")
+        assert r.returncode == 0
+        assert "command not found" not in r.stderr
+        r = self.run("echo nope; exit 127", "-x", "ready", "-i", "0.05", "-T", "0.5")
+        assert r.returncode == 1
+        assert "command not found" in r.stderr
+
+    @pytest.mark.skipif(platform.system() != "Linux", reason="--service is Linux-only")
+    def test_service_replays_quoted_regex(self):
+        root = tempfile.mkdtemp()
+        bindir = os.path.join(root, "stub")
+        os.mkdir(bindir)
+        for stub in ("systemctl", "journalctl"):
+            path = os.path.join(bindir, stub)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(path, 0o755)
+        result = subprocess.run(
+            ["../await", "--expect", '"up" \\d$', "echo up", "--service", "t"],
+            env={**os.environ, "HOME": root, "PATH": bindir + ":" + os.environ["PATH"]},
+            capture_output=True, text=True, timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+        with open(os.path.join(root, ".config/systemd/user/t.service")) as f:
+            unit = f.read()
+        assert '--expect "\\"up\\" \\\\d$$"' in unit
+
+
 class TestOctalEscapes:
     def test_octal_escape_is_not_a_placeholder(self):
         """\\001 is printf's octal escape, not \\1: output must not change between runs."""
@@ -2026,6 +3047,210 @@ class TestOctalEscapes:
         )
         lines = {l for l in strip_ansi_escape_codes(stdout).replace("\r", "\n").split("\n") if l.strip()}
         assert lines == {"a\x01b"}, lines
+
+
+class TestTimes:
+    """--times N: a command is done only after N successful checks in a row."""
+
+    PATTERN_SCRIPT = (
+        "#!/bin/sh\n"
+        "# run k: result k of the comma-separated pattern (the last one repeats)\n"
+        "n=$(cat \"$1.n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$1.n\"\n"
+        "r=$(echo \"$2\" | cut -d, -f$n); [ -z \"$r\" ] && r=$(echo \"$2\" | awk -F, '{print $NF}')\n"
+        "echo \"$r\" >> \"$1.log\"\n"
+        "[ \"$r\" = ok ]\n"
+    )
+
+    @pytest.fixture
+    def pattern(self):
+        """Returns (command, log path) for a command that follows a pattern of ok/fail."""
+        root = tempfile.mkdtemp(dir=TMPDIR)
+        script = os.path.join(root, "pattern.sh")
+        with open(script, "w") as f:
+            f.write(self.PATTERN_SCRIPT)
+        os.chmod(script, 0o755)
+        state = os.path.join(root, "state")
+
+        def make(results):
+            return f"{script} {state} {results}"
+
+        def runs():
+            try:
+                with open(state + ".log") as f:
+                    return f.read().split()
+            except FileNotFoundError:
+                return []
+        make.runs = runs
+        make.root = root
+        yield make
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+    def test_default_is_one_success(self, pattern):
+        cmd = pattern("fail,ok")
+        returncode, stdout, stderr = run_await_with_timeout(f'-V -i 0.05 "{cmd}"')
+        assert returncode == 0
+        assert pattern.runs()[:2] == ["fail", "ok"]
+
+    def test_needs_n_consecutive_successes(self, pattern):
+        cmd = pattern("fail,ok,fail,ok,ok,ok")
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.2 --times 3 "{cmd}"',
+            description="Done only at the third ok in a row (run 6)"
+        )
+        elapsed = time.time() - start
+        assert returncode == 0
+        runs = pattern.runs()
+        assert runs[:6] == ["fail", "ok", "fail", "ok", "ok", "ok"]
+        assert len(runs) <= 8  # it stops right after the streak completes (+1 for scheduling)
+        assert elapsed >= 1.0, f"exited after {elapsed:.2f}s, before 6 runs 0.2s apart"
+
+    def test_failure_resets_streak(self, pattern):
+        """ok,ok,fail,ok,ok never has 3 in a row until the pattern's last ok repeats."""
+        cmd = pattern("ok,ok,fail,ok,ok,fail,ok")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --times 3 "{cmd}"'
+        )
+        assert returncode == 0
+        assert pattern.runs()[:9] == ["ok", "ok", "fail", "ok", "ok", "fail", "ok", "ok", "ok"]
+
+    def test_timeout_when_streak_never_completes(self, pattern):
+        import json
+        cmd = pattern("ok,fail,ok,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --json -i 0.05 -T 0.6 --times 3 "{cmd}"', timeout=3.0
+        )
+        assert returncode == 1
+        data = json.loads(stdout.strip())
+        assert data["success"] is False
+        assert data["commands"][0]["times"] == 3
+        assert data["commands"][0]["streak"] < 3
+
+    def test_json_reports_streak(self, pattern):
+        import json
+        cmd = pattern("ok")
+        returncode, stdout, stderr = run_await_with_timeout(f'--json -i 0.05 --times 2 "{cmd}"')
+        assert returncode == 0
+        command = json.loads(stdout.strip())["commands"][0]
+        assert command["streak"] == 2 and command["times"] == 2
+
+    def test_json_reports_the_streak_that_ended_the_wait(self, pattern):
+        """A completed streak is reported as it was when it completed, even
+        after a later check broke it (or, with a slow --exec, extended it)."""
+        import json
+        early = pattern("ok,ok,fail")  # completes its streak at run 2, then fails for good
+        late = os.path.join(pattern.root, "late")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'--json -i 0.05 --times 2 "{early}" '
+            f'"[ -e {late} ] || {{ sleep 0.5; touch {late}; false; }}" --exec "sleep 0.3"',
+            timeout=5.0
+        )
+        assert returncode == 0
+        early_json, late_json = json.loads(stdout.strip())["commands"]
+        assert early_json["streak"] == 2  # its live streak is 0 by now
+        assert late_json["streak"] == 2   # its live streak grew during --exec
+        assert pattern.runs()[2] == "fail"
+
+    def test_json_unchanged_without_times(self):
+        import json
+        returncode, stdout, stderr = run_await_with_timeout('--json "true"')
+        assert "streak" not in json.loads(stdout.strip())["commands"][0]
+
+    def test_fail_counts_consecutive_failures(self, pattern):
+        cmd = pattern("fail,ok,fail,fail,ok,fail")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --fail --times 3 "{cmd}"'
+        )
+        assert returncode == 0
+        assert pattern.runs()[:8] == ["fail", "ok", "fail", "fail", "ok", "fail", "fail", "fail"]
+
+    def test_any_waits_for_one_full_streak(self, pattern):
+        """With --any, the first command to reach N in a row wins, not the first success."""
+        flappy = pattern("ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail")
+        counter = os.path.join(pattern.root, "steady")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --any --times 3 "{flappy}" "echo x >> {counter}"'
+        )
+        assert returncode == 0
+        with open(counter) as f:
+            assert len(f.readlines()) >= 3
+        # without --times, the flapping command's first ok would have ended it
+        assert pattern.runs()[0] == "ok"
+
+    @pytest.mark.parametrize("value", ["0", "-1", "abc", "2x", "1.5", ""])
+    def test_invalid_n(self, value):
+        returncode, stdout, stderr = run_await_with_timeout(f'--times "{value}" true')
+        assert returncode == 2
+        assert "--times" in stderr
+
+    def test_forever_exec_fires_once_per_streak(self, pattern):
+        # streaks of 2+ oks: runs 1-4 (one streak), 6-8 (another); then fails forever
+        cmd = pattern("ok,ok,ok,ok,fail,ok,ok,ok,fail")
+        fired = os.path.join(pattern.root, "fired")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --forever --times 2 "{cmd}" --exec "echo x >> {fired}"',
+            timeout=4.0
+        )
+        assert returncode == 124  # --forever: killed by the test
+        # past the pattern: failing checks after the last streak fire nothing more
+        assert len(pattern.runs()) > 10
+        with open(fired) as f:
+            assert len(f.readlines()) == 2
+
+    def test_change_counts_every_nth_change_in_a_row(self, pattern):
+        """--change --times 2: output changing on every check completes a streak
+        at the 2nd, 4th, 6th ... change, not just the 2nd."""
+        counter = os.path.join(pattern.root, "counter")
+        fired = os.path.join(pattern.root, "fired")
+        cmd = f"n=\\$(cat {counter} 2>/dev/null || echo 0); echo \\$((n+1)) > {counter}; echo \\$n"
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 3 -i 0.05 --change --times 2 --forever "{cmd}" --exec "echo x >> {fired}"',
+            timeout=8.0
+        )
+        assert returncode == 1  # -T ends --forever
+        time.sleep(0.2)  # let an --exec started just before exit finish
+        with open(counter) as f:
+            changes = int(f.read()) - 1  # the first run is the baseline
+        with open(fired) as f:
+            fires = len(f.readlines())
+        # enough changes to tell "every 2nd" from "only the 2nd" (~0.15s a run on
+        # a slow runner still gives ~20 in 3s)
+        assert changes >= 8, changes
+        # one --exec per 2 changes; at exit, a run in progress may have bumped
+        # the counter and the last streak may still be pending
+        assert fires >= 2 and changes // 2 - 2 <= fires <= changes // 2, (changes, fires)
+
+    def test_completed_streak_is_not_lost_when_it_breaks(self, pattern):
+        """A command that reached N counts as done even if a later check broke
+        its streak before the others were done."""
+        early = pattern("ok,ok,fail")  # completes its streak at run 2, then fails for good
+        late = os.path.join(pattern.root, "late")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --times 2 "{early}" "[ -e {late} ] || {{ sleep 0.5; touch {late}; false; }}"',
+            timeout=5.0
+        )
+        assert returncode == 0
+        assert pattern.runs()[:3] == ["ok", "ok", "fail"]
+
+    def test_forever_exec_runs_for_each_streak_completed_during_it(self, pattern):
+        """Streaks that complete while a slow --exec runs are not merged into one."""
+        cmd = pattern("ok,fail,ok,fail,ok,fail")  # 3 streaks within ~0.3s, then failures
+        fired = os.path.join(pattern.root, "fired")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 3 -i 0.05 --forever --times 1 "{cmd}" --exec "sleep 0.6; echo x >> {fired}"',
+            timeout=6.0
+        )
+        assert returncode == 1
+        with open(fired) as f:
+            assert len(f.readlines()) == 3
+
+    def test_timeout_report_shows_change_streak(self):
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-T 0.5 -i 0.05 --change --times 3 "echo same"', timeout=5.0
+        )
+        assert returncode == 1
+        assert "0 of 3 changes in a row" in strip_ansi_escape_codes(stderr)
 
 
 class TestExitCleanup:
@@ -2048,6 +3273,179 @@ class TestExitCleanup:
                 os.remove(marker)
 
 
+class TestBackoff:
+    """--backoff MAX: after each failed check the command's pause doubles
+    (from --interval, +-10% jitter, capped at MAX); a success resets it."""
+
+    # A measured pause (one run's end to the next run's start, stamped by the
+    # command itself) is the real pause plus process exit/spawn, interpreter
+    # startup and scheduling: on CI runners up to ~0.17s, varying run to run.
+    # That can only make a pause look longer, so lower bounds are strict
+    # (0.85x: the pause minus its 10% jitter) and are what show the backoff.
+    # Upper bounds never assume a fixed overhead: they compare pauses of the
+    # same run with each other, with margins that correct behaviour keeps
+    # however slow the runner, but that a wrong one (no cap, no reset,
+    # backoff without the flag) breaks by a wide margin.
+    # AWAIT_TEST_SLOW_STAMP=<seconds> sleeps that long before each start stamp
+    # and after each end stamp, to simulate a slow runner.
+
+    @staticmethod
+    def stamp_command():
+        """Shell command appending '<tag> <epoch seconds>' to stdout ($1 = tag);
+        macOS date has no %N, so perl (fast to start) or python3."""
+        import shutil
+        if shutil.which("perl"):
+            return "perl -MTime::HiRes=time -e 'printf \"%s %.6f\\n\", $ARGV[0], time'"
+        return "python3 -c 'import sys, time; print(sys.argv[1], \"%.6f\" % time.time())'"
+
+    @staticmethod
+    def fmt(pauses):
+        """pauses in full for assertion messages (pytest abbreviates long lists)"""
+        return " ".join(f"{p:.3f}" for p in pauses)
+
+    @pytest.fixture
+    def check(self):
+        """check(ok_when) -> a command for await that stamps its start and end
+        in a log and succeeds when the shell test ok_when holds ($n: number of
+        earlier runs); check.pauses(before) -> seconds between each run's end
+        and the next run's start, for the runs that started before `before`
+        (with -T, the pause ending at the deadline is cut short on purpose)."""
+        root = tempfile.mkdtemp(dir=TMPDIR)
+        log = os.path.join(root, "log")
+        script = os.path.join(root, "check.sh")
+        slow = os.environ.get("AWAIT_TEST_SLOW_STAMP")
+        delay = f"sleep {slow}\n" if slow else ""
+
+        def make(ok_when="false"):
+            stamp = self.stamp_command()
+            with open(script, "w") as f:
+                f.write(f'n=$(grep -c "^s" "{log}" 2>/dev/null)\n'
+                        f'{delay}{stamp} s >> "{log}"\n'
+                        f'if {ok_when}; then rc=0; else rc=1; fi\n'
+                        f'{stamp} e >> "{log}"\n{delay}'
+                        f'exit $rc\n')
+            return f"sh {script}"
+
+        def pauses(before=None):
+            starts, ends = [], []
+            with open(log) as f:
+                for line in f:
+                    tag, t = line.split()
+                    (starts if tag == "s" else ends).append(float(t))
+            return [s - e for e, s in zip(ends, starts[1:]) if before is None or s < before]
+
+        make.pauses = pauses
+        yield make
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+    # These runs end by the command succeeding, not by -T, so no pause is cut
+    # short at a deadline. On a loaded machine await may start one more run
+    # before it notices that success, so only the pauses up to the successful
+    # run are checked.
+
+    def test_intervals_double_up_to_the_cap(self, check):
+        # runs 1-6 fail, run 7 succeeds
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 6 ]")}"', timeout=10.0)
+        assert returncode == 0
+        pauses = check.pauses()
+        # 0.1 0.2 0.4 0.8 0.8 0.8, each +-10%
+        assert len(pauses) >= 6, self.fmt(pauses)
+        pauses = pauses[:6]
+        for pause, expected in zip(pauses, [0.1, 0.2, 0.4, 0.8, 0.8, 0.8]):
+            assert pause >= expected * 0.85, f"{self.fmt(pauses)} (expected {expected})"
+        # at the cap it stops doubling: uncapped the 5th pause would be 1.6s,
+        # at least 0.56s longer than the 4th even with jitter
+        assert max(pauses[4:]) - pauses[3] < 0.4, self.fmt(pauses)
+
+    def test_cap_is_respected(self, check):
+        # runs 1-7 fail, run 8 succeeds
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --interval 0.1 --backoff 0.3 "{check("[ $n -ge 7 ]")}"', timeout=10.0)
+        assert returncode == 0
+        pauses = check.pauses()
+        assert len(pauses) >= 7, self.fmt(pauses)
+        pauses = pauses[:7]
+        capped = pauses[2:]  # 0.3 0.3 0.3 0.3 0.3
+        assert all(p >= 0.3 * 0.85 for p in capped), self.fmt(pauses)
+        # flat at the cap: uncapped these would be 0.4 0.8 1.6 3.2 6.4
+        assert max(capped) - statistics.median(capped) < 0.3, self.fmt(pauses)
+        assert max(capped) < 2 * min(capped) + 0.15, self.fmt(pauses)
+
+    def test_success_resets_the_interval(self, check):
+        # runs 1-4 fail (pauses 0.1 0.2 0.4 0.8), run 5 succeeds, then failures
+        # again (0.1 0.2 ...); --forever needs -T to end, so leave out the
+        # pauses near it
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 6 --forever --interval 0.1 --backoff 0.8 "{check("[ $n -eq 4 ]")}"',
+            timeout=10.0)
+        assert returncode == 1
+        pauses = check.pauses(before=start + 6)
+        assert len(pauses) >= 6, self.fmt(pauses)
+        assert pauses[3] >= 0.8 * 0.85, self.fmt(pauses)  # after the 4th failure: 0.8
+        # after the success back to --interval (without the reset: 0.8 again),
+        # and after the next failure too (without the reset: still 0.8)
+        assert pauses[4] < pauses[3] / 2, self.fmt(pauses)
+        assert pauses[5] < pauses[3] / 2, self.fmt(pauses)
+
+    def test_timeout_is_not_overshot(self):
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-V -T 1 --interval 0.1 --backoff 30 "false"', timeout=5.0,
+            description="The 30s backoff pause must not delay the 1s timeout")
+        elapsed = time.time() - start
+        assert returncode == 1
+        assert elapsed < 2.0, f"took {elapsed:.2f}s"
+
+    def test_no_back_to_back_reruns_at_the_deadline(self, check):
+        """The pause that would pass -T is cut to end at the deadline, but once
+        it has passed pauses are not cut to nothing: the command must not be
+        rerun back to back while await is giving up."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 1.05 --interval 0.1 --backoff 30 "{check()}"', timeout=5.0)
+        assert returncode == 1
+        # await notices -T at its next 0.1s tick, up to ~0.05s after the deadline
+        pauses = check.pauses()
+        # 0.1 0.2 0.4, then 0.8 would pass the deadline (~0.7s in) and is cut
+        assert len(pauses) <= 4, self.fmt(pauses)
+
+    def test_success_during_backoff_is_noticed_at_next_check(self, check):
+        """A command that starts succeeding is picked up at its next check."""
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --interval 0.1 --backoff 0.8 "{check("[ $n -ge 3 ]")}"', timeout=8.0)
+        assert returncode == 0
+        pauses = check.pauses()
+        # pauses 0.1 0.2 0.4, then the 4th run succeeds and await is done
+        assert len(pauses) in (3, 4), self.fmt(pauses)
+        assert pauses[2] >= 0.4 * 0.85, self.fmt(pauses)
+
+    @pytest.mark.parametrize("value", ["abc", "0", "-1", "", "1s"])
+    def test_invalid_max(self, value):
+        returncode, stdout, stderr = run_await_with_timeout(f'--backoff "{value}" true')
+        assert returncode == 2
+        assert "--backoff" in stderr
+
+    @pytest.mark.parametrize("flags", ["--interval 1 --backoff 0.5", "--backoff 0.5 --interval 1"])
+    def test_max_below_interval(self, flags):
+        returncode, stdout, stderr = run_await_with_timeout(f'{flags} true')
+        assert returncode == 2
+        assert "--interval" in stderr
+
+    def test_unchanged_without_flag(self, check):
+        # runs 1-7 fail, run 8 succeeds
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --interval 0.1 "{check("[ $n -ge 7 ]")}"', timeout=5.0)
+        assert returncode == 0
+        pauses = check.pauses()
+        assert len(pauses) >= 7, self.fmt(pauses)
+        pauses = pauses[:7]
+        assert all(p >= 0.1 * 0.85 for p in pauses), self.fmt(pauses)
+        # no growth: backing off, these would be 0.1 0.2 0.4 0.8 1.6 3.2 6.4
+        assert max(pauses) - statistics.median(pauses) < 0.4, self.fmt(pauses)
+
+
 class TestPublishOrder:
     def test_exec_always_sees_the_output_that_triggered_it(self):
         """Status becomes visible only together with the run's output, so
@@ -2067,6 +3465,262 @@ class TestPublishOrder:
             command = json.loads(stdout.strip())["commands"][0]
             assert command["status"] == 0
             assert command["output"] == "done\n"
+
+
+class TestFeatureInteractions:
+    """Flags from 2.11.0 combined: --expect, --times, --backoff, --notify, --service."""
+
+    SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "await.c")
+    AWAIT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "await")
+
+    # run k prints/does step k of a comma-separated pattern (the last one repeats):
+    #   up    prints UP<k> and exits 1 (a match, whatever the exit status)
+    #   down  prints DOWN<k> and exits 0 (no match, whatever the exit status)
+    #   hang  sleeps past -t 1, so the run is killed (status 124)
+    PATTERN_SCRIPT = (
+        "#!/bin/sh\n"
+        "n=$(cat \"$1.n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$1.n\"\n"
+        "r=$(echo \"$2\" | cut -d, -f$n); [ -z \"$r\" ] && r=$(echo \"$2\" | awk -F, '{print $NF}')\n"
+        "echo \"$r\" >> \"$1.log\"\n"
+        "case $r in\n"
+        "  up) echo UP$n; exit 1;;\n"
+        "  down) echo DOWN$n; exit 0;;\n"
+        "  hang) sleep 3;;\n"
+        "esac\n"
+    )
+
+    @pytest.fixture
+    def pattern(self):
+        import shutil
+        root = tempfile.mkdtemp(dir=TMPDIR)
+        script = os.path.join(root, "pattern.sh")
+        with open(script, "w") as f:
+            f.write(self.PATTERN_SCRIPT)
+        os.chmod(script, 0o755)
+        state = os.path.join(root, "state")
+
+        def make(steps):
+            return f"{script} {state} {steps}"
+
+        def runs():
+            try:
+                with open(state + ".log") as f:
+                    return f.read().split()
+            except FileNotFoundError:
+                return []
+        make.runs = runs
+        make.root = root
+        yield make
+        shutil.rmtree(root, ignore_errors=True)
+
+    @staticmethod
+    def run(argv, env=None, timeout=15):
+        base = {k: v for k, v in os.environ.items()
+                if k not in ("TERM_PROGRAM", "LC_TERMINAL", "KITTY_WINDOW_ID", "WT_SESSION", "TMUX",
+                             "SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT")}
+        base.update(AWAIT_NO_UPDATE_CHECK="1", NO_COLOR="1", **(env or {}))
+        return subprocess.run([TestFeatureInteractions.AWAIT, *argv], env=base,
+                              capture_output=True, text=True, timeout=timeout)
+
+    # --expect + --times
+
+    def test_expect_times_counts_matches_in_a_row(self, pattern):
+        """Exit statuses are the opposite of the matches: only the output counts."""
+        cmd = pattern("down,up,down,up,up,up")
+        r = self.run(["-V", "-i", "0.05", "--expect", "^UP", "--times", "3", "--json", cmd])
+        assert r.returncode == 0, r.stderr
+        assert pattern.runs()[:6] == ["down", "up", "down", "up", "up", "up"]
+        result = json.loads(r.stdout)["commands"][0]
+        assert result["status"] == 0 and result["streak"] == 3 and result["times"] == 3
+
+    def test_expect_times_cmd_timeout_breaks_the_streak(self, pattern):
+        """A run killed by -t neither matched nor failed to match: it starts the streak over."""
+        cmd = pattern("up,hang,up,up")
+        r = self.run(["-V", "-i", "0.05", "-t", "1", "--expect", "^UP", "--times", "2", "-T", "10", cmd])
+        assert r.returncode == 0, r.stderr
+        # up, hang (streak broken), up, up: not done at the first up after the hang
+        assert pattern.runs()[:4] == ["up", "hang", "up", "up"]
+
+    def test_expect_times_fail_cmd_timeout_is_not_a_failure(self, pattern):
+        """--fail: a streak of non-matches; a killed run is not a non-match either."""
+        cmd = pattern("down,hang,down,down")
+        r = self.run(["-V", "-i", "0.05", "-t", "1", "--fail", "--expect", "^UP", "--times", "2",
+                      "-T", "10", "--json", cmd])
+        assert r.returncode == 0, r.stderr
+        runs = pattern.runs()
+        # were the timed-out run counted, the streak would complete at run 2
+        assert runs[:4] == ["down", "hang", "down", "down"], runs
+        assert json.loads(r.stdout)["commands"][0]["streak"] == 2
+
+    def test_expect_times_timeout_report(self, pattern):
+        cmd = pattern("up,down")
+        r = self.run(["-i", "0.05", "--expect", "^UP", "--times", "3", "-T", "0.6", cmd])
+        assert r.returncode == 1
+        assert "last output did not match --expect" in r.stderr, r.stderr
+        assert "0 of 3 checks in a row" in r.stderr, r.stderr
+
+    def test_expect_change_times_counts_only_matching_changes(self, pattern):
+        """--change --expect --times 2: a change to non-matching output breaks the streak."""
+        cmd = pattern("up,up,down,up,up")
+        r = self.run(["-V", "-i", "0.05", "--change", "--expect", "^UP", "--times", "2", "-T", "10", cmd])
+        assert r.returncode == 0, r.stderr
+        # run 2 changes (1 in a row), run 3 changes to DOWN (not counted: 0),
+        # runs 4 and 5 change to matching output (2 in a row)
+        runs = pattern.runs()
+        assert runs[:5] == ["up", "up", "down", "up", "up"], runs
+
+    # --backoff + --expect
+
+    def test_backoff_resets_on_expect_match(self, pattern):
+        """Misses back off; a match (exit 1 here) is a successful check and resets the pause."""
+        cmd = pattern("down,down,down,down,up")
+        r = self.run(["-V", "-i", "0.1", "--backoff", "2", "--expect", "^UP", "--forever", "-T", "6", cmd],
+                     timeout=15)
+        assert r.returncode == 1  # --forever ends at -T
+        runs = pattern.runs()
+        assert runs[:4] == ["down"] * 4
+        # the misses take ~1.5s of pauses (0.1+0.2+0.4+0.8); the matches are then
+        # 0.1s apart (plus the run itself, ~0.25s on a slow runner) for the
+        # remaining ~4.5s: 12 or more. Backing off on them (1.6s, then 2s apart)
+        # would leave room for about 4, however fast the machine.
+        assert runs.count("up") >= 8, runs
+
+    def test_backoff_fail_expect_counts_non_matches_as_success(self, pattern):
+        """--fail --expect: a non-match is what we wait for, so it keeps the interval."""
+        cmd = pattern("down")
+        r = self.run(["-V", "-i", "0.1", "--backoff", "4", "--fail", "--expect", "^UP", "--forever", "-T", "5", cmd],
+                     timeout=15)
+        assert r.returncode == 1
+        # 0.1s apart (plus the run itself, ~0.25s on a slow runner) for 5s: 14 or
+        # more. Backing off would pause 0.1, 0.2, 0.4, 0.8, 1.6, then 3.2 cut to
+        # the deadline: about 7 runs, however fast the machine.
+        assert len(pattern.runs()) >= 10, pattern.runs()
+
+    # --notify + --expect/--times
+
+    def notify_body(self, argv, tmp_path, **kw):
+        tty = tmp_path / "tty"
+        tty.write_bytes(b"")
+        r = self.run(["--notify", "-V", *argv], env={"TERM_PROGRAM": "WezTerm", "AWAIT_NOTIFY_TTY": str(tty)}, **kw)
+        m = re.search(rb"\x1b\]9;await: (.*?)(?:\x07|\x1b\\)", tty.read_bytes())
+        assert m, (tty.read_bytes(), r.stderr)
+        return r, m.group(1).decode()
+
+    def test_notify_expect_times_done(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--expect", "UP", "--times", "2", "echo UP; exit 3"], tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert re.fullmatch(r"done in \d+\.\ds: echo UP; exit 3 matched --expect \(2 of 2 checks in a row\)", body), body
+
+    def test_notify_expect_times_several_commands(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--expect", "UP", "--times", "2", "echo UP", "echo UP"], tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert re.fullmatch(r"done in \d+\.\ds: 2/2 commands matched --expect 2 times in a row", body), body
+
+    def test_notify_expect_timeout(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--expect", "UP", "--times", "3", "-T", "0.5",
+                                    "echo UP", "echo DOWN"], tmp_path)
+        assert r.returncode == 1
+        assert re.fullmatch(r"timed out after 0\.\ds: 1/2 commands matched --expect 3 times in a row; "
+                            r"echo DOWN didn't match --expect \(0 of 3 checks in a row\)", body), body
+
+    def test_notify_expect_fail(self, tmp_path):
+        r, body = self.notify_body(["-i", "0.05", "--fail", "--expect", "UP", "echo DOWN", "echo NOPE"], tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert re.fullmatch(r"done in \d+\.\ds: 2/2 commands didn't match --expect", body), body
+
+    def test_notify_expect_cmd_timeout(self, tmp_path):
+        r, body = self.notify_body(["-t", "1", "-T", "1.5", "--expect", "UP", "sleep 3; echo UP"], tmp_path)
+        assert r.returncode == 1
+        assert re.fullmatch(r"timed out after 1\.\ds: sleep 3; echo UP exited 124 \(--cmd-timeout\)", body), body
+
+    # the man page (generated from --help) keeps multi-line NOTES together
+
+    def test_man_page_joins_wrapped_notes(self):
+        gen = os.path.join(os.path.dirname(self.SRC), "man", "gen-man.sh")
+        r = subprocess.run(["sh", gen, self.AWAIT], capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, r.stderr
+        desc = r.stdout[r.stdout.index(".SH DESCRIPTION"):r.stdout.index(".SH OPTIONS")]
+        # a line of a wrapped note that became its own paragraph ends in ",." or ";."
+        assert not re.search(r"[,;]\.$", desc, re.M), desc
+        paragraphs = desc.split(".PP\n")
+        para = next(p for p in paragraphs if "notify" in p and "tries, in order" in p)
+        assert "PowerShell toast" in para and "terminal bell" in para
+        para = next(p for p in paragraphs if "\\-\\-times and \\-\\-forever" in p)
+        assert "every Nth change" in para
+
+    # --service replays every flag, and getopt values never collide
+
+    @staticmethod
+    def long_options():
+        """(name, has_arg, val) rows of parse_args' long_options table."""
+        with open(TestFeatureInteractions.SRC) as f:
+            src = f.read()
+        table = src[src.index("static struct option long_options[]"):]
+        table = table[:table.index("{0, 0, 0, 0}")]
+        return re.findall(r'\{"([\w-]+)",\s*(\w+),\s*0,\s*([^}\s]+)\s*\}', table)
+
+    def test_no_duplicate_getopt_values(self):
+        rows = self.long_options()
+        assert len(rows) > 20
+        vals = [val for _, _, val in rows if val != "0"]
+        assert len(vals) == len(set(vals)), vals
+        # the OPT_* constants must be distinct numbers, and not clash with a short letter
+        with open(self.SRC) as f:
+            src = f.read()
+        enums = re.findall(r"enum\s*\{\s*(OPT_[^}]*)\}", src)
+        assert len(enums) == 1, enums
+        members = [m.strip() for m in enums[0].split(",") if m.strip()]
+        values, n = {}, None
+        for m in members:
+            name, _, v = m.partition("=")
+            n = int(v) if v.strip() else n + 1
+            values[name.strip()] = n
+        assert len(set(values.values())) == len(values)
+        assert min(values.values()) > 255
+        assert not re.search(r"#define\s+OPT_", src)
+        used = {val for _, _, val in rows if val.startswith("OPT_")}
+        assert used <= set(values), used - set(values)
+        # every short letter in the optstring appears once
+        optstring = re.search(r'getopt_long\(argc, argv, "([^"]+)"', src).group(1)
+        letters = optstring.replace(":", "")
+        assert len(letters) == len(set(letters)), optstring
+
+    def test_every_option_is_in_help_and_completions(self):
+        help_text = self.run(["--help"]).stdout
+        bash = self.run(["--autocomplete-bash"]).stdout
+        for name, _, val in self.long_options():
+            if val == "0":  # --update and the autocomplete helpers
+                continue
+            assert f"--{name}" in help_text, name
+            assert f"--{name}" in bash, name
+
+    @pytest.mark.skipif(platform.system() != "Linux", reason="systemd unit on Linux")
+    def test_service_replays_every_flag_under_its_own_name(self, tmp_path):
+        """Every long option that --service replays comes back under its own
+        name, exactly once (a shared getopt value would replay the wrong name)."""
+        argv, expected = [], []
+        for name, has_arg, val in self.long_options():
+            if val == "0" or name in ("help", "version", "service"):
+                continue
+            argv.append(f"--{name}")
+            if has_arg == "required_argument":
+                argv.append("1")
+                expected.append(f'--{name} "1"')
+            else:
+                expected.append(f"--{name}")
+        home = tmp_path / "home"
+        home.mkdir()
+        r = self.run([*argv, "true", "--service", "every"], env={"HOME": str(home), "AWAIT_SERVICE_NO_ACTIVATE": "1"})
+        assert r.returncode == 0, r.stderr
+        unit = (home / ".config/systemd/user/every.service").read_text()
+        exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
+        tokens = re.findall(r'--[\w-]+(?: "1")?', exec_start)
+        for flag in expected:
+            assert tokens.count(flag) == 1, (flag, exec_start)
+        assert len(tokens) == len(expected), exec_start
+        for flag in ("--expect", "--times", "--backoff", "--notify"):
+            assert flag in exec_start
+
 
 if __name__ == "__main__":
     # Make sure await binary exists

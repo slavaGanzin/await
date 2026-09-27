@@ -24,6 +24,7 @@ _await() {
     '--name[Label for the next command]:name:' \
     '--json[Output results as JSON on exit]' \
     '--lap[Show last run duration per command in spinner]' \
+    '--notify[Desktop notification when await finishes]' \
     '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \
     '--service[Create systemd user service with same parameters and activate it]:service name:'
 }

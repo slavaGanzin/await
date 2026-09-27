@@ -1,5 +1,25 @@
 # Release Notes
 
+## 2.11.0
+
+### New Features
+
+- **`--expect REGEX` (`-x`)**: a command succeeds when its stdout matches the POSIX extended regex (`^`/`$` match at each line; stderr is not matched), whatever it exits with, e.g. `await 'curl -s localhost:8080/health' --expect '"status": *"up"'`. Works with `--fail` (wait until it stops matching), `--any`, `--change` (only a change to matching output counts), `--exec`, `--retry` and `-t` (a timed-out run never matches); `--json` reports status 0 for a match and 1 otherwise. An invalid regex exits with status 2.
+- **`--times N`**: a command counts as done only after N successful checks in a row, and any unsuccessful check starts the count over, so a flapping service doesn't end the wait (`await 'curl -sf localhost:8080/health' --times 3 --interval 1`). With `--fail` it counts failures in a row; with `--forever`, `--exec` runs once each time a streak reaches N rather than on every check after; `--json` reports each command's `streak` (for a command that completed its streak, the streak that ended the wait). With `--expect` a check is successful when the output matches (with `--fail`, when it doesn't), and a run killed by `-t` is neither, so it breaks the streak.
+- **`--backoff MAX`**: after each unsuccessful check of a command, the pause before its next one doubles, starting from `--interval` and capped at MAX seconds, with ±10% jitter so commands don't poll in lockstep; a successful check (the same one `--times` counts: with `--expect`, a match) brings it back to `--interval` (`await 'curl -sf https://api.example.com' --backoff 60`). It spaces out the runs `--retry` counts, and `--timeout` still ends the wait on time.
+- **`--notify`** sends a desktop notification with the outcome when await finishes (`done in 12s: 3/3 commands succeeded`, `timed out after 5m: ...`), and with `--forever` each time `--exec` finishes, even with `--silent`; with `--expect` it says whether the output matched, and with `--times` how far each command's streak got. It uses the terminal's own notifications where supported (iTerm2, WezTerm, ghostty, kitty, foot, Windows Terminal, VS Code; also through tmux and over SSH), then `terminal-notifier`/`osascript` on macOS, `notify-send`/`gdbus`/`kdialog` on Linux, a PowerShell toast on Windows, and a terminal bell as the last resort. Notifiers run without a shell, the text is sanitized, and a missing, failing or hung notifier never changes the exit code or delays exit by more than 2 s.
+- **`--service NAME` works on macOS**: it writes a launchd agent to `~/Library/LaunchAgents/await.NAME.plist` that replays the exact arguments (minus `--service`), starts at login, restarts whenever it exits (like `Restart=always` on systemd), keeps your `PATH` and logs to `~/Library/Logs/await-NAME.log`, then loads it with `launchctl`. Stop it with `launchctl bootout gui/$UID/await.NAME`. Service names are now checked on both platforms (letters, digits, `.`, `_`, `-`; systemd also allows `:`).
+- **Windows build** (`x86_64-pc-windows-msys`) for Git Bash and MSYS2: commands keep the same `sh` syntax as on Linux and macOS, and `await --update` works there too. `--service` isn't available on Windows.
+- **Homebrew**: `brew tap slavaganzin/await https://github.com/slavaGanzin/await && brew install slavaganzin/await/await` installs the prebuilt release on macOS and Linux (arm64 and x86_64), with bash, zsh and fish completions and the man page; `brew upgrade await` updates it. The formula is regenerated from each release's `SHA256SUMS`.
+- **`man await`**: an `await(1)` man page, generated at build time from `--help` (so it never drifts from it), installed by `cmake --install` and shipped in every release archive; `await --update` also refreshes an installed one (`<prefix>/share/man/man1/await.1` next to `<prefix>/bin/await`).
+
+### Changes
+
+- Release binaries are size-optimised and stripped (they used to ship with debug info). Unused code is dropped at link time, and on Linux the unwind tables and the 4KB padding between segments are gone. On x86_64 Linux that takes the 2.11.0 glibc build from 99KB to 61KB and the static musl build from 248KB to 183KB, with the shell completions now generated from one table instead of three hand-written copies; the other targets are built the same way.
+- CI installs the latest published release over every build with `await --update` (Linux, macOS, static x86_64 and arm64 Linux), so a broken release or updater fails the build.
+
+---
+
 ## 2.10.0
 
 ### New Features
