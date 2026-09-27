@@ -14,11 +14,25 @@ fail() { echo "update e2e: $*" >&2; exit 1; }
 
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-cp "$bin" "$dir/await"
-built=$("$dir/await" --version)
+# keep the .exe name on Windows (MSYS2)
+case $bin in *.exe) a=$dir/await.exe;; *) a=$dir/await;; esac
+cp "$bin" "$a"
+built=$("$a" --version)
 
-log=$(env -u AWAIT_RELEASES_URL -u AWAIT_UPDATE_TARGET AWAIT_UPDATE_FORCE=1 "$dir/await" --update 2>&1) \
-  || fail "await --update failed: $log"
+if ! log=$(env -u AWAIT_RELEASES_URL -u AWAIT_UPDATE_TARGET AWAIT_UPDATE_FORCE=1 "$a" --update 2>&1); then
+  # a platform added after the latest release has nothing to install yet:
+  # AWAIT_E2E_ALLOW_MISSING=<version> skips only releases older than <version>
+  # (the first release with this platform's build); after that it's a failure
+  case $log in *"has no "*" build"*)
+    since=${AWAIT_E2E_ALLOW_MISSING:-}
+    tag=$(printf '%s\n' "$log" | sed -n 's/.*release \([^ ]*\) has no .*/\1/p')
+    if [ -n "$since" ] && [ -n "$tag" ] && [ "${tag#v}" != "$since" ] &&
+       [ "$(printf '%s\n%s\n' "${tag#v}" "$since" | sort -V | head -n1)" = "${tag#v}" ]; then
+      echo "update e2e: skipped: release $tag predates $since, the first with this build"; exit 0
+    fi;;
+  esac
+  fail "await --update failed: $log"
+fi
 echo "$log"
 
 # check against exactly what the updater fetched (not a separate lookup of
@@ -33,23 +47,24 @@ echo "update e2e: installed release $tag over this build ($built)"
 mkdir "$dir/release"
 curl -fsSL --retry 3 -o "$dir/release.tar.gz" "$url" && tar -xzf "$dir/release.tar.gz" -C "$dir/release" \
   || fail "couldn't fetch $url to compare"
-cmp -s "$dir/release/await" "$dir/await" || fail "installed await isn't the one in $url"
-cmp -s "$bin" "$dir/await.old" || fail "backup isn't the build we started from"
-[ -x "$dir/await" ] || fail "installed await isn't executable"
+rel=$dir/release/await; [ -f "$rel.exe" ] && rel=$rel.exe
+cmp -s "$rel" "$a" || fail "installed await isn't the one in $url"
+cmp -s "$bin" "$a.old" || fail "backup isn't the build we started from"
+[ -x "$a" ] || fail "installed await isn't executable"
 rm -rf "$dir/release" "$dir/release.tar.gz"
 
-got=$("$dir/await" --version)
+got=$("$a" --version)
 [ "$got" = "$latest" ] || fail "installed await reports '$got', expected $latest"
-old=$("$dir/await.old" --version)
+old=$("$a.old" --version)
 [ "$old" = "$built" ] || fail "backup reports '$old', expected $built"
-out=$("$dir/await" 'echo ok' --stdout --silent)
+out=$("$a" 'echo ok' --stdout --silent)
 [ "$out" = ok ] || fail "installed await doesn't run commands (got '$out')"
 leftovers=$(find "$dir" -name '.await-update*')
 [ -z "$leftovers" ] || fail "left behind: $leftovers"
 
 # without the override, the release is not newer than itself (unless a newer
 # one was published meanwhile, which a plain update then rightly installs)
-msg=$(env -u AWAIT_UPDATE_FORCE "$dir/await" --update 2>&1) || fail "second --update failed: $msg"
+msg=$(env -u AWAIT_UPDATE_FORCE "$a" --update 2>&1) || fail "second --update failed: $msg"
 case $msg in *"already up to date ($latest)"*|*"updated $latest -> "*) ;; *) fail "second --update said: $msg";; esac
 
 echo "update e2e: ok ($built -> $latest from $url, backup kept)"

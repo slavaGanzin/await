@@ -10,6 +10,7 @@
 - **`--service NAME` works on macOS**: it writes a launchd agent to `~/Library/LaunchAgents/await.NAME.plist` that replays the exact arguments (minus `--service`), starts at login, restarts whenever it exits (like `Restart=always` on systemd), keeps your `PATH` and logs to `~/Library/Logs/await-NAME.log`, then loads it with `launchctl`. Stop it with `launchctl bootout gui/$UID/await.NAME`. Service names are now checked on both platforms (letters, digits, `.`, `_`, `-`; systemd also allows `:`).
 - **`man await`**: an `await(1)` man page, generated at build time from `--help` (so it never drifts from it), installed by `cmake --install` and shipped in every release archive; `await --update` also refreshes an installed one (`<prefix>/share/man/man1/await.1` next to `<prefix>/bin/await`).
 - **Homebrew**: `brew tap slavaganzin/await https://github.com/slavaGanzin/await && brew install slavaganzin/await/await` installs the prebuilt release on macOS and Linux (arm64 and x86_64), with bash, zsh and fish completions and the man page; `brew upgrade await` updates it. The formula is regenerated from each release's `SHA256SUMS`.
+- **Windows build** (`x86_64-pc-windows-msys`) for Git Bash and MSYS2: commands keep the same `sh` syntax as on Linux and macOS, and `await --update` works there too. `--service` isn't available on Windows.
 
 ### Changes
 

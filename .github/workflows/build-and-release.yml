@@ -193,6 +193,55 @@ jobs:
         name: await-linux-musl-${{ matrix.arch }}
         path: linux-musl-${{ matrix.arch }}
 
+  # Windows: an MSYS2 (Cygwin-runtime) build for Git Bash and MSYS2 shells, where
+  # commands keep the same sh syntax as on Linux and macOS. It needs the
+  # msys-2.0.dll that those shells already ship in /usr/bin.
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MSYS
+        update: true
+        install: gcc make cmake python python-pip curl procps-ng tar
+
+    - name: Build
+      run: |
+        cmake -B build/
+        cmake --build build/
+        mkdir -p windows-msys
+        cp build/await.exe build/await.fish build/await.bash build/await.zsh build/await.1 windows-msys/
+        cp build/await.exe ./await.exe
+        # tests run ../await, which is otherwise the tracked macOS binary
+        cp build/await.exe ./await
+
+    - name: Run tests
+      working-directory: tests
+      run: |
+        python -m pip install --break-system-packages pytest pytest-timeout
+        python -m pytest test_await.py -v
+
+    # releases before 2.11.0 have no Windows build; from 2.11.0 on a missing one fails
+    - name: End-to-end update from the latest release
+      env:
+        AWAIT_E2E_ALLOW_MISSING: 2.11.0
+      run: |
+        tests/update_e2e.sh ./await.exe
+        # Git Bash reports MINGW64_NT-... from uname
+        MSYSTEM=MINGW64 tests/update_e2e.sh ./await.exe
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: await-windows-msys
+        path: windows-msys
+
   # The tap formula (Formula/await.rb) installs the latest published release:
   # generate it from that release's SHA256SUMS and install and test it with brew
   homebrew:
@@ -283,7 +332,7 @@ jobs:
         [ "$(await --version)" = "$LATEST" ]
 
   release:
-    needs: [build, build-linux-static]
+    needs: [build, build-linux-static, build-windows]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # pushes the regenerated Homebrew formula to main (and uploads the release)
@@ -383,12 +432,13 @@ jobs:
         tree
         # actions/upload-artifact drops file permissions; without this every
         # released binary was non-executable
-        chmod +x await-*/await
+        chmod +x await-*/await await-windows-msys/await.exe
         cd await-macos-latest-arm64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-aarch64-apple-darwin.tar.gz * && cd ..
         cd await-macos-latest-x86_64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-apple-darwin.tar.gz * && cd ..
         cd await-ubuntu-latest && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-unknown-linux-gnu.tar.gz * && cd ..
         cd await-linux-musl-x86_64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-unknown-linux-musl.tar.gz * && cd ..
         cd await-linux-musl-aarch64 && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-aarch64-unknown-linux-musl.tar.gz * && cd ..
+        cd await-windows-msys && tar -czvf ../archives/await-${{ steps.get_version.outputs.VERSION }}-x86_64-pc-windows-msys.tar.gz * && cd ..
         # `await --update` refuses to install anything it can't verify against this
         (cd archives && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
         tree

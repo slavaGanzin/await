@@ -1687,6 +1687,10 @@ static const char *release_target(void) {
   if (!strcmp(u.sysname, "Darwin")) return arm ? "aarch64-apple-darwin" : x86 ? "x86_64-apple-darwin" : "";
   // Linux gets the static (musl) build: it runs regardless of the distro's libc
   if (!strcmp(u.sysname, "Linux")) return arm ? "aarch64-unknown-linux-musl" : x86 ? "x86_64-unknown-linux-musl" : "";
+  // Windows: the MSYS2 build, for MSYS2 (uname: MSYS_NT-...) and Git Bash or
+  // MSYS2's MinGW shells (MINGW64_NT-..., MINGW32_NT-...). A plain Cygwin
+  // install (CYGWIN_NT-...) lacks msys-2.0.dll, so it gets no prebuilt build.
+  if (!strncmp(u.sysname, "MSYS_NT", 7) || !strncmp(u.sysname, "MINGW", 5)) return x86 ? "x86_64-pc-windows-msys" : "";
   return "";
 }
 
@@ -1755,9 +1759,12 @@ int run_update(void) {
     " else say 'need sha256sum or shasum to verify the download'; exit 8; fi\n"
     "got=${got%% *}\n"
     "[ -n \"$want\" ] && [ \"$want\" = \"$got\" ] || { say \"checksum mismatch for $archive; not installing\"; exit 8; }\n"
-    "mkdir \"$tmp/x\" && tar -xzf \"$tmp/$archive\" -C \"$tmp/x\" && [ -f \"$tmp/x/await\" ] || { say \"couldn't unpack $archive\"; exit 9; }\n"
-    "chmod +x \"$tmp/x/await\"\n"
-    "ran=$(\"$tmp/x/await\" --version 2>/dev/null)\n"
+    // (the Windows archive holds await.exe)
+    "mkdir \"$tmp/x\" && tar -xzf \"$tmp/$archive\" -C \"$tmp/x\" || { say \"couldn't unpack $archive\"; exit 9; }\n"
+    "bin=$tmp/x/await; [ -f \"$bin.exe\" ] && bin=$bin.exe\n"
+    "[ -f \"$bin\" ] || { say \"couldn't unpack $archive\"; exit 9; }\n"
+    "chmod +x \"$bin\"\n"
+    "ran=$(\"$bin\" --version 2>/dev/null)\n"
     "[ \"$ran\" = \"$new\" ] || { say \"the downloaded await doesn't run here (--version gave '${ran:-nothing}'); staying on $cur\"; exit 10; }\n"
     // the backup is copied inside our own temp dir and renamed into place:
     // rename replaces whatever is at $self.old (a symlink included) instead of
@@ -1766,7 +1773,7 @@ int run_update(void) {
     "rm -f \"$self.old\" 2>/dev/null\n"
     "{ [ ! -e \"$self.old\" ] && [ ! -L \"$self.old\" ] && mv -f \"$tmp/old\" \"$self.old\"; }"
     " || { say \"couldn't keep a backup at $self.old; not updating\"; exit 11; }\n"
-    "mv -f \"$tmp/x/await\" \"$self\" || { say \"couldn't replace $self\"; exit 11; }\n"
+    "mv -f \"$bin\" \"$self\" || { say \"couldn't replace $self\"; exit 11; }\n"
     // refresh an installed man page (never create one, never write through a
     // symlink); a failure here is only a note, the update has already succeeded
     "m=$dir/../share/man/man1/await.1 mt=\n"
@@ -1937,7 +1944,14 @@ int main(int argc, char *argv[]) {
     nofile.rlim_cur = nofile.rlim_max == RLIM_INFINITY || nofile.rlim_max > 10240 ? 10240 : nofile.rlim_max;
     setrlimit(RLIMIT_NOFILE, &nofile);
   }
-  if (args.service) return service_main();
+  if (args.service) {
+#ifdef __CYGWIN__
+    fprintf(stderr, "await: --service isn't supported on Windows\n");
+    return 2;
+#else
+    return service_main();
+#endif
+  }
   update_check();
 
   // Ensure the program does not ignore signals when running in a script

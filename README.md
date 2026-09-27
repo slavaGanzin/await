@@ -5,7 +5,7 @@
 
 # ![build](https://github.com/slavaGanzin/await/actions/workflows/build-and-release.yml/badge.svg)
 
-**Platform support:** Linux and macOS only
+**Platform support:** Linux, macOS and Windows (in Git Bash or MSYS2; commands run with the same `sh` syntax everywhere)
 
 ### install
 ```bash
@@ -23,6 +23,10 @@ nix-shell -p await
 
 # arch
 yay -S await
+
+# windows, in Git Bash or MSYS2: take await-<version>-x86_64-pc-windows-msys.tar.gz from
+# https://github.com/slavaGanzin/await/releases/latest and put await.exe on your PATH
+mkdir -p ~/bin && tar -xzf await-*-x86_64-pc-windows-msys.tar.gz -C ~/bin await.exe   # Git Bash puts ~/bin on PATH
 
 # not recommended, but it works!
 curl https://i.jpillora.com/slavaGanzin/await! | bash

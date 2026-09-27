@@ -767,10 +767,12 @@ class TestExecFlag:
         # but the command should complete successfully
 
 
-@pytest.mark.skipif(platform.system() != "Linux", reason="--service is Linux/systemd only")
+@pytest.mark.skipif(platform.system() not in ("Linux", "Darwin"),
+                    reason="--service needs systemd (Linux) or launchd (macOS)")
 class TestService:
-    """--service writes a systemd unit that replays the full command line."""
+    """--service writes a systemd unit (Linux) or launchd agent (macOS) that replays the full command line."""
 
+    @pytest.mark.skipif(platform.system() == "Darwin", reason="systemd is Linux-only")
     def test_service_unit_keeps_all_flags_and_escapes(self):
         import shutil
         root = tempfile.mkdtemp()
@@ -1957,20 +1959,20 @@ class FakeReleases:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/releases"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True, extra_files=None):
+    def publish(self, version, target="test-target", binary=None, checksum=None, sums=True, extra_files=None, name="await"):
         """Publish `version` with an archive for `target` whose `await` is a stand-in
         that answers --version (or `binary`, a shell script), plus `extra_files`
-        ({name: text}) next to it."""
+        ({name: text}) next to it; `name` is the binary's name in the archive."""
         import hashlib, io, tarfile
         self.latest = version
         script = binary or f"#!/bin/sh\necho {version}\n"
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            info = tarfile.TarInfo("await")
+            info = tarfile.TarInfo(name)
             info.size, info.mode = len(script), 0o644   # like the old archives: not executable
             tar.addfile(info, io.BytesIO(script.encode()))
-            for name, text in (extra_files or {}).items():
-                info = tarfile.TarInfo(name)
+            for extra, text in (extra_files or {}).items():
+                info = tarfile.TarInfo(extra)
                 info.size, info.mode = len(text.encode()), 0o644
                 tar.addfile(info, io.BytesIO(text.encode()))
         archive = f"await-{version}-{target}.tar.gz"
@@ -2278,6 +2280,14 @@ class TestSelfUpdate:
         assert "has no test-target build" in err
         self.assert_untouched()
 
+    def test_windows_archive_with_await_exe(self):
+        """The Windows (MSYS2) archive holds await.exe instead of await."""
+        self.releases.publish("99.0.0", name="await.exe")
+        returncode, err = self.update()
+        assert returncode == 0, err
+        assert self.installed_version() == "99.0.0"
+        assert self.installed_version(self.binary + ".old") == self.version
+
     def test_forced_update_reinstalls_the_same_or_an_older_release(self):
         """AWAIT_UPDATE_FORCE (CI's end-to-end check) installs the latest release
         even when it isn't newer, through the same verified path."""
@@ -2313,6 +2323,8 @@ class TestSelfUpdate:
         self.assert_untouched()
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root can write anywhere")
+    @pytest.mark.skipif(platform.system().startswith(("MSYS", "CYGWIN")),
+                        reason="chmod can't make a directory read-only on Windows")
     def test_unwritable_install_suggests_sudo(self):
         self.releases.publish("99.0.0")
         os.chmod(self.bin_dir, 0o555)
@@ -2339,12 +2351,23 @@ class TestSelfUpdate:
         static musl build on Linux)."""
         machine = platform.machine().lower()
         arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
-        target = f"{arch}-apple-darwin" if platform.system() == "Darwin" else f"{arch}-unknown-linux-musl"
+        if platform.system() == "Darwin":
+            target = f"{arch}-apple-darwin"
+        elif platform.system().startswith(("MSYS", "CYGWIN")):
+            target = "x86_64-pc-windows-msys"
+        else:
+            target = f"{arch}-unknown-linux-musl"
         self.releases.publish("99.0.0", target=target)
         env = {k: v for k, v in self.env.items() if k != "AWAIT_UPDATE_TARGET"}
         returncode, err = self.update(env=env)
         assert returncode == 0, err
         assert f"/releases/download/99.0.0/await-99.0.0-{target}.tar.gz" in self.releases.requests
+        if platform.system().startswith("MSYS"):
+            # Git Bash (and MSYS2's MinGW shells) report MINGW64_NT-... from uname
+            import shutil
+            shutil.copy("../await", self.binary)
+            returncode, err = self.update(env={**env, "MSYSTEM": "MINGW64"})
+            assert returncode == 0, err
 
     def test_auto_update_in_the_background(self):
         """AWAIT_AUTO_UPDATE=1: an interactive run's background check installs the update."""
