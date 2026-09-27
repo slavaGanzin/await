@@ -55,6 +55,10 @@ typedef struct {
   _Atomic int runs;      // completed runs
   _Atomic int changes;   // runs whose stdout differed from the previous run
   int seenChanges;       // changes already acted on by the main loop
+  _Atomic int streak;    // consecutive successful checks (--times)
+  _Atomic int reached;   // completed --times streaks (--change: every Nth change in a row)
+  int seenReached;       // completed streaks already acted on by the main loop
+  _Atomic int reachedStreak;  // the streak when the last one completed (--json)
   // guards out/outPos/outCap/previousOut/diffOut: the command's thread
   // writes them while the main loop and other commands read them
   pthread_mutex_t lock;
@@ -86,7 +90,11 @@ typedef struct {
   int lap;
   char *expect;     // --expect: success is stdout matching this regex
   regex_t expect_re;
+  int times;  // --times N: successes in a row a command needs (0: not given, i.e. 1)
 } ARGS;
+
+// long options without a short letter
+enum { OPT_TIMES = 256 };
 
 ARGS args = {.interval=200, .expectedStatus = 0, .silent=0, .change=0, .nCommands=0, .args="", .timeout=0, .cmd_timeout=0, .retry=0};
 
@@ -152,6 +160,7 @@ void print_autocomplete_fish() {
          "complete -c await -l json -s j -d 'Output results as JSON on exit'\n"
          "complete -c await -l lap -s l -d 'Show last run duration per command in spinner'\n"
          "complete -c await -l expect -s x -d 'Succeed when stdout matches this extended regex (exit status ignored)' -r\n"
+         "complete -c await -l times -d 'Consecutive successful checks needed [default: 1]' -r\n"
          "complete -c await -l service -s S -d 'Create systemd user service with same parameters and activate it'\n"
          "complete -c await -l no-stderr -s E -d 'Surpress stderr of commands by adding 2>/dev/null to commands'\n"
          "complete -c await -l watch -s w -d 'Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)'\n"
@@ -167,14 +176,14 @@ void print_autocomplete_bash() {
          "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
          "    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n"
          "\n"
-         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --expect --update\"\n"
+         "    opts=\"--help --stdout --silent --fail --status --any --change --diff --exec --interval --timeout --cmd-timeout --retry --forever --service --version --no-stderr --watch --name --json --lap --expect --times --update\"\n"
          "\n"
          "    case \"${prev}\" in\n"
          "        --exec)\n"
          "            COMPREPLY=($(compgen -c -- \"${cur}\"))\n"
          "            return 0\n"
          "            ;;\n"
-         "        --status|--interval|--timeout|--cmd-timeout|--retry|--name|--service|--expect)\n"
+         "        --status|--interval|--timeout|--cmd-timeout|--retry|--times|--name|--service|--expect)\n"
          "            return 0\n"
          "            ;;\n"
          "    esac\n"
@@ -220,6 +229,7 @@ void print_autocomplete_zsh() {
          "    '--json[Output results as JSON on exit]' \\\n"
          "    '--lap[Show last run duration per command in spinner]' \\\n"
          "    '--expect[Succeed when stdout matches this extended regex (exit status ignored)]:regex:' \\\n"
+         "    '--times[Consecutive successful checks needed (default: 1)]:times:' \\\n"
          "    '--watch[Equivalent to -fVodE (fail, silent, stdout, diff, no-stderr)]' \\\n"
          "    '--service[Create systemd user service with same parameters and activate it]:service name:'\n"
          "}\n"
@@ -528,7 +538,24 @@ int wait_exec(pid_t pid) {
   return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
 }
 
+// is a single check of a command successful (before --times counts them)?
+int check_ok(int status, int changed) {
+  if (args.change) return changed;
+  // --expect: a timed-out run (124) neither matched nor failed to match, so
+  // it is not a successful check with or without --fail (it breaks a streak)
+  if (args.expect && status == 124) return 0;
+  return args.fail ? status != 0 : status == args.expectedStatus;
+}
+
 int not_done_cmd(int i) {
+  if (args.times) {
+    // a completed streak not acted on yet counts even if a later check has
+    // broken the streak before the main loop got to see it
+    if (c[i].reached != c[i].seenReached) return 0;
+    // --change: every Nth change in a row is an event to act on once
+    if (args.change) return 1;
+    return c[i].streak < args.times;
+  }
   if (args.change) return c[i].changes == c[i].seenChanges;
   // --expect: a timed-out run (124) neither matched nor failed to match
   if (args.expect && c[i].status == 124) return 1;
@@ -570,7 +597,14 @@ void print_json_result(int exit_code) {
     print_json_string(c[i].name);
     printf(",\"command\":");
     print_json_string(c[i].command);
-    printf(",\"status\":%d,\"output\":", c[i].status);
+    printf(",\"status\":%d,", c[i].status);
+    if (args.times) {
+      // a command whose completed streak ended the wait reports that streak,
+      // not whatever its checks since (the thread keeps running) made of it
+      int streak = !args.forever && c[i].reached > 0 ? c[i].reachedStreak : c[i].streak;
+      printf("\"streak\":%d,\"times\":%d,", streak, args.times);
+    }
+    printf("\"output\":");
     pthread_mutex_lock(&c[i].lock);
     print_json_string(c[i].previousOut);
     pthread_mutex_unlock(&c[i].lock);
@@ -734,6 +768,8 @@ void help() {
   "  await 'ls /tmp/redis.sock'; redis-cli -s /tmp/redis.sock\n\n"
   "# daily checking if I am on french reviera. Just in case\n"
   "  await 'curl https://ipapi.co/json 2>/dev/null | jq .city | grep Nice' --interval 86400\n\n"
+  "# don't trust a flapping service: wait for 3 healthy checks in a row\n"
+  "  await 'curl -sf localhost:8080/health' --times 3 --interval 1\n\n"
   "# get pinged the moment your site goes down\n"
   "  await 'curl -sf https://myapp.com' --fail --forever --exec 'ntfy send \"site is down\"'\n\n"
   "# ...as a systemd daemon that survives reboots\n"
@@ -759,6 +795,7 @@ void help() {
   "  --json -j\t\t#output results as JSON on exit\n"
   "  --lap -l\t\t#show last run duration per command in spinner\n"
   "  --expect -x\t\t#succeed when stdout matches this POSIX extended regex (^ and $ match at each line; exit status is ignored)\n"
+  "  --times\t\t#a command is done only after N successful checks in a row (failures with --fail); a miss starts over [default: 1]\n"
   "  --service -S\t\t#create systemd user service with same parameters and activate it\n"
   "  --version -v\t\t#print the version of await\n"
   "  --update\t\t#update await to the latest release (checksum-verified; the old binary is kept as <path>.old)\n"
@@ -773,6 +810,8 @@ void help() {
   "# the output is passed as data ($AWAIT_1, $AWAIT_2 ...), so it is never run as shell code\n"
   "# you can use stdout substitution in --exec and in commands itself:\n"
   "  await 'echo 10' 'date +%S' 'expr \\1 + \\2' --exec 'echo \\3' --forever --silent\n"
+  "# with --times and --forever, --exec runs once each time a streak reaches N, not on every check after\n"
+  "# (--change --times N: at every Nth change in a row)\n"
   "# set NO_COLOR=1 to disable colors\n"
   "# in an interactive terminal, await checks for a newer release in the background (at most daily)\n"
   "# and mentions it on stderr; set AWAIT_NO_UPDATE_CHECK=1 to turn this off,\n"
@@ -872,6 +911,7 @@ void parse_args(int argc, char *argv[]) {
             {"json",  no_argument,       0, 'j'},
             {"lap",   no_argument,       0, 'l'},
             {"expect", required_argument, 0, 'x'},
+            {"times", required_argument, 0, OPT_TIMES},
             {"update", no_argument, 0, 0},
             {"autocompletions", no_argument, 0, 0},
             {"autocomplete-fish", no_argument, 0, 0},
@@ -965,6 +1005,17 @@ void parse_args(int argc, char *argv[]) {
           case 'j': args.json = 1; break;
           case 'l': args.lap = 1; break;
           case 'x': args.expect = optarg; break;
+          case OPT_TIMES: {
+            char *end;
+            errno = 0;
+            long n = strtol(optarg, &end, 10);
+            if (errno || end == optarg || *end || n < 1 || n > INT_MAX) {
+              fprintf(stderr, "await: --times needs a positive integer, got '%s'\n", optarg);
+              exit(2);
+            }
+            args.times = (int)n;
+            break;
+          }
         }
       }
 
@@ -1208,8 +1259,18 @@ void *shell(void * arg) {
     // output, so whoever acts on them (--exec, --json, \1) sees that output
     c->status = run_status;
     c->runs++;
-    // with --expect only a change to matching output counts
-    if (changed && (!args.expect || run_status == 0)) c->changes++;
+    // with --expect only a change to matching output counts (for --times too)
+    int counted_change = changed && (!args.expect || run_status == 0);
+    if (counted_change) c->changes++;
+    if (args.times) {
+      // an unsuccessful check starts the streak over
+      c->streak = !check_ok(run_status, counted_change) ? 0 : c->streak < INT_MAX ? c->streak + 1 : c->streak;
+      // a streak completes at N successes in a row (--change: at every Nth change in a row)
+      if (c->streak > 0 && (args.change ? c->streak % args.times == 0 : c->streak == args.times)) {
+        c->reachedStreak = c->streak;
+        c->reached++;
+      }
+    }
     pthread_mutex_unlock(&c->lock);
 
     if (args.daemonize) syslog(LOG_NOTICE, "%d %s", c->status, c->command);
@@ -1568,6 +1629,8 @@ int main(int argc, char *argv[]) {
       
       for(int i = 1; i <= args.nCommands; i++) {
         int color = c[i].status == -1 ? 7 : c[i].status == args.expectedStatus ? 2 : 1;
+        // --times: on a streak that hasn't reached N yet
+        if (args.times && !args.change && c[i].streak > 0 && c[i].streak < args.times) color = 3;
         
         // Add status line
         if (args.lap && c[i].last_duration_ms > 0) {
@@ -1676,10 +1739,20 @@ int main(int argc, char *argv[]) {
     // reap an --exec started by an earlier trigger (--forever)
     if (exec_pid > 0 && waitpid(exec_pid, NULL, WNOHANG) != 0) exec_pid = 0;
 
+    // --times: act once per streak, so a trigger needs a streak that reached
+    // N since the last one (only matters with --forever)
+    int new_streak = !args.times;
+    for (int i = 1; i <= args.nCommands && !new_streak; i++)
+      new_streak = c[i].reached != c[i].seenReached;
+
     // with --forever, a trigger during a running --exec waits for it to finish
-    if ((not_done == 0 || args.any && not_done < args.nCommands) && !exec_pid) {
-      // act on each change only once
-      for (int i = 1; i <= args.nCommands; i++) c[i].seenChanges = c[i].changes;
+    if ((not_done == 0 || args.any && not_done < args.nCommands) && new_streak && !exec_pid) {
+      // act on each change only once, and on each completed --times streak
+      // once: streaks completed while an --exec ran each get their own run
+      for (int i = 1; i <= args.nCommands; i++) {
+        c[i].seenChanges = c[i].changes;
+        if (c[i].seenReached != c[i].reached) c[i].seenReached++;
+      }
 
       int exec_status = 0;
       if (args.exec) {
@@ -1719,6 +1792,8 @@ int main(int argc, char *argv[]) {
             } else {
               fprintf(stderr, "  '%s': last exit %d\n", c[i].command, c[i].status);
             }
+            if (args.times && c[i].status != -1)
+              fprintf(stderr, "    %d of %d %s in a row\n", c[i].streak, args.times, args.change ? "changes" : "checks");
           }
         }
         if (args.json) print_json_result(1);

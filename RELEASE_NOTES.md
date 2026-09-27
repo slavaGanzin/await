@@ -5,6 +5,7 @@
 ### New Features
 
 - **`--expect REGEX` (`-x`)**: a command succeeds when its stdout matches the POSIX extended regex (`^`/`$` match at each line; stderr is not matched), whatever it exits with, e.g. `await 'curl -s localhost:8080/health' --expect '"status": *"up"'`. Works with `--fail` (wait until it stops matching), `--any`, `--change` (only a change to matching output counts), `--exec`, `--retry` and `-t` (a timed-out run never matches); `--json` reports status 0 for a match and 1 otherwise. An invalid regex exits with status 2.
+- **`--times N`**: a command counts as done only after N successful checks in a row, and any unsuccessful check starts the count over, so a flapping service doesn't end the wait (`await 'curl -sf localhost:8080/health' --times 3 --interval 1`). With `--fail` it counts failures in a row; with `--forever`, `--exec` runs once each time a streak reaches N rather than on every check after; `--json` reports each command's `streak` (for a command that completed its streak, the streak that ended the wait). With `--expect` a check is successful when the output matches (with `--fail`, when it doesn't), and a run killed by `-t` is neither, so it breaks the streak.
 
 ### Changes
 

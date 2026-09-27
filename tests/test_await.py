@@ -787,7 +787,7 @@ class TestService:
         shutil.copy("../await", binary)
 
         result = subprocess.run(
-            [binary, "--name", "web", "--json", "--lap", "-i", "0.5",
+            [binary, "--name", "web", "--json", "--lap", "-i", "0.5", "--times", "3",
              'curl -sf "http://x/$HOME" | grep 100%', "--service", "t"],
             env={**os.environ, "HOME": home, "PATH": bindir + ":" + os.environ["PATH"]},
             capture_output=True, text=True, timeout=5,
@@ -798,7 +798,7 @@ class TestService:
             unit = f.read()
         exec_start = next(l for l in unit.splitlines() if l.startswith("ExecStart="))
         assert exec_start.startswith(f'ExecStart="{binary}" ')
-        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"'):
+        for flag in ('--name "web"', "--json", "--lap", '--interval "0.5"', '--times "3"'):
             assert flag in exec_start
         # systemd expands $ and % and ends the argument at an unescaped quote
         assert '"curl -sf \\"http://x/$$HOME\\" | grep 100%%"' in exec_start
@@ -2175,6 +2175,207 @@ class TestOctalEscapes:
         )
         lines = {l for l in strip_ansi_escape_codes(stdout).replace("\r", "\n").split("\n") if l.strip()}
         assert lines == {"a\x01b"}, lines
+
+
+class TestTimes:
+    """--times N: a command is done only after N successful checks in a row."""
+
+    PATTERN_SCRIPT = (
+        "#!/bin/sh\n"
+        "# run k: result k of the comma-separated pattern (the last one repeats)\n"
+        "n=$(cat \"$1.n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$1.n\"\n"
+        "r=$(echo \"$2\" | cut -d, -f$n); [ -z \"$r\" ] && r=$(echo \"$2\" | awk -F, '{print $NF}')\n"
+        "echo \"$r\" >> \"$1.log\"\n"
+        "[ \"$r\" = ok ]\n"
+    )
+
+    @pytest.fixture
+    def pattern(self):
+        """Returns (command, log path) for a command that follows a pattern of ok/fail."""
+        root = tempfile.mkdtemp(dir=TMPDIR)
+        script = os.path.join(root, "pattern.sh")
+        with open(script, "w") as f:
+            f.write(self.PATTERN_SCRIPT)
+        os.chmod(script, 0o755)
+        state = os.path.join(root, "state")
+
+        def make(results):
+            return f"{script} {state} {results}"
+
+        def runs():
+            try:
+                with open(state + ".log") as f:
+                    return f.read().split()
+            except FileNotFoundError:
+                return []
+        make.runs = runs
+        make.root = root
+        yield make
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+    def test_default_is_one_success(self, pattern):
+        cmd = pattern("fail,ok")
+        returncode, stdout, stderr = run_await_with_timeout(f'-V -i 0.05 "{cmd}"')
+        assert returncode == 0
+        assert pattern.runs()[:2] == ["fail", "ok"]
+
+    def test_needs_n_consecutive_successes(self, pattern):
+        cmd = pattern("fail,ok,fail,ok,ok,ok")
+        start = time.time()
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.2 --times 3 "{cmd}"',
+            description="Done only at the third ok in a row (run 6)"
+        )
+        elapsed = time.time() - start
+        assert returncode == 0
+        runs = pattern.runs()
+        assert runs[:6] == ["fail", "ok", "fail", "ok", "ok", "ok"]
+        assert len(runs) <= 8  # it stops right after the streak completes (+1 for scheduling)
+        assert elapsed >= 1.0, f"exited after {elapsed:.2f}s, before 6 runs 0.2s apart"
+
+    def test_failure_resets_streak(self, pattern):
+        """ok,ok,fail,ok,ok never has 3 in a row until the pattern's last ok repeats."""
+        cmd = pattern("ok,ok,fail,ok,ok,fail,ok")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --times 3 "{cmd}"'
+        )
+        assert returncode == 0
+        assert pattern.runs()[:9] == ["ok", "ok", "fail", "ok", "ok", "fail", "ok", "ok", "ok"]
+
+    def test_timeout_when_streak_never_completes(self, pattern):
+        import json
+        cmd = pattern("ok,fail,ok,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V --json -i 0.05 -T 0.6 --times 3 "{cmd}"', timeout=3.0
+        )
+        assert returncode == 1
+        data = json.loads(stdout.strip())
+        assert data["success"] is False
+        assert data["commands"][0]["times"] == 3
+        assert data["commands"][0]["streak"] < 3
+
+    def test_json_reports_streak(self, pattern):
+        import json
+        cmd = pattern("ok")
+        returncode, stdout, stderr = run_await_with_timeout(f'--json -i 0.05 --times 2 "{cmd}"')
+        assert returncode == 0
+        command = json.loads(stdout.strip())["commands"][0]
+        assert command["streak"] == 2 and command["times"] == 2
+
+    def test_json_reports_the_streak_that_ended_the_wait(self, pattern):
+        """A completed streak is reported as it was when it completed, even
+        after a later check broke it (or, with a slow --exec, extended it)."""
+        import json
+        early = pattern("ok,ok,fail")  # completes its streak at run 2, then fails for good
+        late = os.path.join(pattern.root, "late")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'--json -i 0.05 --times 2 "{early}" '
+            f'"[ -e {late} ] || {{ sleep 0.5; touch {late}; false; }}" --exec "sleep 0.3"',
+            timeout=5.0
+        )
+        assert returncode == 0
+        early_json, late_json = json.loads(stdout.strip())["commands"]
+        assert early_json["streak"] == 2  # its live streak is 0 by now
+        assert late_json["streak"] == 2   # its live streak grew during --exec
+        assert pattern.runs()[2] == "fail"
+
+    def test_json_unchanged_without_times(self):
+        import json
+        returncode, stdout, stderr = run_await_with_timeout('--json "true"')
+        assert "streak" not in json.loads(stdout.strip())["commands"][0]
+
+    def test_fail_counts_consecutive_failures(self, pattern):
+        cmd = pattern("fail,ok,fail,fail,ok,fail")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --fail --times 3 "{cmd}"'
+        )
+        assert returncode == 0
+        assert pattern.runs()[:8] == ["fail", "ok", "fail", "fail", "ok", "fail", "fail", "fail"]
+
+    def test_any_waits_for_one_full_streak(self, pattern):
+        """With --any, the first command to reach N in a row wins, not the first success."""
+        flappy = pattern("ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail,ok,fail")
+        counter = os.path.join(pattern.root, "steady")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --any --times 3 "{flappy}" "echo x >> {counter}"'
+        )
+        assert returncode == 0
+        with open(counter) as f:
+            assert len(f.readlines()) >= 3
+        # without --times, the flapping command's first ok would have ended it
+        assert pattern.runs()[0] == "ok"
+
+    @pytest.mark.parametrize("value", ["0", "-1", "abc", "2x", "1.5", ""])
+    def test_invalid_n(self, value):
+        returncode, stdout, stderr = run_await_with_timeout(f'--times "{value}" true')
+        assert returncode == 2
+        assert "--times" in stderr
+
+    def test_forever_exec_fires_once_per_streak(self, pattern):
+        # streaks of 2+ oks: runs 1-4 (one streak), 6-8 (another); then fails forever
+        cmd = pattern("ok,ok,ok,ok,fail,ok,ok,ok,fail")
+        fired = os.path.join(pattern.root, "fired")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --forever --times 2 "{cmd}" --exec "echo x >> {fired}"',
+            timeout=2.0
+        )
+        assert returncode == 124  # --forever: killed by the test
+        assert len(pattern.runs()) > 10
+        with open(fired) as f:
+            assert len(f.readlines()) == 2
+
+    def test_change_counts_every_nth_change_in_a_row(self, pattern):
+        """--change --times 2: output changing on every check completes a streak
+        at the 2nd, 4th, 6th ... change, not just the 2nd."""
+        counter = os.path.join(pattern.root, "counter")
+        fired = os.path.join(pattern.root, "fired")
+        cmd = f"n=\\$(cat {counter} 2>/dev/null || echo 0); echo \\$((n+1)) > {counter}; echo \\$n"
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 1.5 -i 0.05 --change --times 2 --forever "{cmd}" --exec "echo x >> {fired}"',
+            timeout=5.0
+        )
+        assert returncode == 1  # -T ends --forever
+        time.sleep(0.2)  # let an --exec started just before exit finish
+        with open(counter) as f:
+            changes = int(f.read()) - 1  # the first run is the baseline
+        with open(fired) as f:
+            fires = len(f.readlines())
+        assert changes >= 10, changes
+        # one --exec per 2 changes; at exit, a run in progress may have bumped
+        # the counter and the last streak may still be pending
+        assert changes // 2 - 2 <= fires <= changes // 2, (changes, fires)
+
+    def test_completed_streak_is_not_lost_when_it_breaks(self, pattern):
+        """A command that reached N counts as done even if a later check broke
+        its streak before the others were done."""
+        early = pattern("ok,ok,fail")  # completes its streak at run 2, then fails for good
+        late = os.path.join(pattern.root, "late")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -i 0.05 --times 2 "{early}" "[ -e {late} ] || {{ sleep 0.5; touch {late}; false; }}"',
+            timeout=5.0
+        )
+        assert returncode == 0
+        assert pattern.runs()[:3] == ["ok", "ok", "fail"]
+
+    def test_forever_exec_runs_for_each_streak_completed_during_it(self, pattern):
+        """Streaks that complete while a slow --exec runs are not merged into one."""
+        cmd = pattern("ok,fail,ok,fail,ok,fail")  # 3 streaks within ~0.3s, then failures
+        fired = os.path.join(pattern.root, "fired")
+        returncode, stdout, stderr = run_await_with_timeout(
+            f'-V -T 3 -i 0.05 --forever --times 1 "{cmd}" --exec "sleep 0.6; echo x >> {fired}"',
+            timeout=6.0
+        )
+        assert returncode == 1
+        with open(fired) as f:
+            assert len(f.readlines()) == 3
+
+    def test_timeout_report_shows_change_streak(self):
+        returncode, stdout, stderr = run_await_with_timeout(
+            '-T 0.5 -i 0.05 --change --times 3 "echo same"', timeout=5.0
+        )
+        assert returncode == 1
+        assert "0 of 3 changes in a row" in strip_ansi_escape_codes(stderr)
 
 
 class TestExitCleanup:
